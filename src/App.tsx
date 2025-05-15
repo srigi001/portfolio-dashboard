@@ -1,32 +1,21 @@
 import { useState } from 'react';
-import { useSupabaseUser } from './hooks/useSupabaseUser';
-import { useSupabasePortfolios } from './hooks/useSupabasePortfolios';
 import { supabase } from './utils/supabaseClient';
-window.supabase = supabase;
 import PortfolioPage from './components/PortfolioPage';
 import SummaryPage from './components/SummaryPage';
 import { Button } from './components/ui/Button';
 import AuthWrapper from './components/AuthWrapper';
+import { useLocalPortfolios } from './hooks/useLocalPortfolios'; // Separate clean hook
+
+const USE_GOOGLE_AUTH = false; // Toggle this true/false ONLY
+
 export default function App() {
-  const { user, loading: authLoading } = useSupabaseUser();
-  const {
-    portfolios,
-    savePortfolio,
-    deletePortfolio,
-    loading: portfoliosLoading,
-  } = useSupabasePortfolios(user);
   const [selectedId, setSelectedId] = useState('summary');
 
-  // ✔ First, check auth loading
-  if (authLoading)
-    return (
-      <div className="flex items-center justify-center h-screen">
-        Checking authentication...
-      </div>
-    );
-
-  // ✔ Then, if not authenticated
-  if (!user) {
+  // --- Google Sign-In Mode (DISABLED in your case) ---
+  if (USE_GOOGLE_AUTH) {
+    // Place the entire Google logic inside this block.
+    // If false, NONE of this is even mounted.
+    // Do not run the user hook outside this.
     return (
       <div className="flex items-center justify-center h-screen">
         <button
@@ -39,14 +28,18 @@ export default function App() {
     );
   }
 
-  // ✔ Then, check portfolio loading
-  if (portfoliosLoading)
+  // --- Local Mode ---
+  const { portfolios, savePortfolio, deletePortfolio, loading } =
+    useLocalPortfolios();
+
+  if (loading)
     return (
       <div className="flex items-center justify-center h-screen">
         Loading portfolios...
       </div>
     );
 
+  // Same as before...
   const handleAddPortfolio = async () => {
     const id = 'portfolio-' + Date.now();
     await savePortfolio({

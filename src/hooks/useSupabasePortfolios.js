@@ -1,16 +1,21 @@
-import { useEffect, useState } from 'react';
+import { useState, useEffect } from 'react';
 import { supabase } from '../utils/supabaseClient';
 
 export function useSupabasePortfolios(user) {
   const [portfolios, setPortfolios] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!user) return;
-    fetchPortfolios();
+    if (user?.id === 'local') {
+      const stored = localStorage.getItem('portfolios');
+      if (stored) setPortfolios(JSON.parse(stored));
+      setLoading(false);
+    } else if (user) {
+      fetchSupabasePortfolios();
+    }
   }, [user]);
 
-  const fetchPortfolios = async () => {
+  const fetchSupabasePortfolios = async () => {
     setLoading(true);
     const { data, error } = await supabase
       .from('portfolios')
@@ -19,28 +24,41 @@ export function useSupabasePortfolios(user) {
 
     if (error) console.error(error);
     else setPortfolios(data || []);
-
     setLoading(false);
   };
 
   const savePortfolio = async (portfolio) => {
-    const existing = portfolios.find((p) => p.id === portfolio.id);
-    if (existing) {
-      await supabase
-        .from('portfolios')
-        .update(portfolio)
-        .eq('id', portfolio.id);
+    if (user?.id === 'local') {
+      const updated = portfolios.find((p) => p.id === portfolio.id)
+        ? portfolios.map((p) => (p.id === portfolio.id ? portfolio : p))
+        : [...portfolios, portfolio];
+      setPortfolios(updated);
+      localStorage.setItem('portfolios', JSON.stringify(updated));
     } else {
-      await supabase
-        .from('portfolios')
-        .insert({ ...portfolio, user_id: user.id });
+      const existing = portfolios.find((p) => p.id === portfolio.id);
+      if (existing) {
+        await supabase
+          .from('portfolios')
+          .update(portfolio)
+          .eq('id', portfolio.id);
+      } else {
+        await supabase
+          .from('portfolios')
+          .insert({ ...portfolio, user_id: user.id });
+      }
+      fetchSupabasePortfolios();
     }
-    fetchPortfolios();
   };
 
   const deletePortfolio = async (id) => {
-    await supabase.from('portfolios').delete().eq('id', id);
-    fetchPortfolios();
+    if (user?.id === 'local') {
+      const updated = portfolios.filter((p) => p.id !== id);
+      setPortfolios(updated);
+      localStorage.setItem('portfolios', JSON.stringify(updated));
+    } else {
+      await supabase.from('portfolios').delete().eq('id', id);
+      fetchSupabasePortfolios();
+    }
   };
 
   return { portfolios, savePortfolio, deletePortfolio, loading };

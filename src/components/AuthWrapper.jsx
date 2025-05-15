@@ -1,7 +1,14 @@
 import { useSupabaseUser } from '../hooks/useSupabaseUser';
 import { supabase } from '../utils/supabaseClient';
 
+const USE_GOOGLE_AUTH = false; // Match App.tsx
+
 export default function AuthWrapper({ children }) {
+  if (!USE_GOOGLE_AUTH) {
+    // Bypass wrapper entirely if auth is disabled
+    return children;
+  }
+
   const { user } = useSupabaseUser();
 
   if (user === undefined) {
@@ -20,7 +27,7 @@ export default function AuthWrapper({ children }) {
             supabase.auth.signInWithOAuth({
               provider: 'google',
               options: {
-                redirectTo: window.location.origin
+                redirectTo: window.location.origin,
               },
             })
           }

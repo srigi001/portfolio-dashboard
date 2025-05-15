@@ -1,38 +1,52 @@
-const BACKEND_BASE = 'https://yfinance-backend.onrender.com'; // use your actual Render URL
+const BACKEND_BASE = 'https://yfinance-backend.onrender.com';
 
 export async function fetchPriceHistory(
   symbol: string,
-  days: number
+  period: '1y' | '5y' | '10y'
 ): Promise<number[]> {
-  const period =
-    days >= 365 * 10
-      ? '10y'
-      : days >= 365 * 5
-      ? '5y'
-      : days >= 365 * 3
-      ? '3y'
-      : days >= 365
-      ? '1y'
-      : 'max';
-
   const res = await fetch(
     `${BACKEND_BASE}/api/price-history?symbol=${symbol}&period=${period}&interval=1d`
   );
   const data = await res.json();
 
   if (!data.prices) throw new Error('No data returned');
-  return data.prices.map((p: number[]) => p[0] || p); // flatten single-item arrays, just in case
+  return data.prices.map((p: number[]) => p[0] || p);
 }
 
-export function calculateCAGR(prices: number[]): number {
+export function calculateCAGR(prices: number[], years: number): number {
   if (prices.length < 2) return 0;
   const start = prices[0];
   const end = prices[prices.length - 1];
-  const years = prices.length / 252;
   return Math.pow(end / start, 1 / years) - 1;
 }
 
+export async function calculateSaferCAGR(symbol: string): Promise<{
+  cagr1Y: number;
+  cagr5Y: number;
+  cagr10Y: number;
+  saferCAGR: number;
+}> {
+  const [prices1Y, prices5Y, prices10Y] = await Promise.all([
+    fetchPriceHistory(symbol, '1y'),
+    fetchPriceHistory(symbol, '5y'),
+    fetchPriceHistory(symbol, '10y'),
+  ]);
+
+  const cagr1Y = calculateCAGR(prices1Y, 1);
+  const cagr5Y = calculateCAGR(prices5Y, 5);
+  const cagr10Y = calculateCAGR(prices10Y, 10);
+
+  // Blended safer CAGR logic (30% 5Y, 70% 10Y)
+  let rawSaferCAGR = 0.3 * cagr5Y + 0.7 * cagr10Y;
+
+  // Apply floor and cap
+  const saferCAGR = Math.min(Math.max(rawSaferCAGR, 0.1), 0.2);
+
+  return { cagr1Y, cagr5Y, cagr10Y, saferCAGR };
+}
+
 export function calculateVolatility(prices: number[]): number {
+  if (prices.length < 2) return 0;
   const returns = [];
   for (let i = 1; i < prices.length; i++) {
     returns.push(Math.log(prices[i] / prices[i - 1]));
