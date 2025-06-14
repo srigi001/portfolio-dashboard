@@ -1,7 +1,6 @@
 import { useSupabaseUser } from '../hooks/useSupabaseUser';
 import { supabase } from '../utils/supabaseClient';
-
-const USE_GOOGLE_AUTH = false; // Match App.tsx
+import { USE_GOOGLE_AUTH } from '../utils/config';
 
 export default function AuthWrapper({ children }) {
   if (!USE_GOOGLE_AUTH) {
@@ -9,9 +8,9 @@ export default function AuthWrapper({ children }) {
     return children;
   }
 
-  const { user } = useSupabaseUser();
+  const { user, loading } = useSupabaseUser();
 
-  if (user === undefined) {
+  if (loading) {
     return (
       <div className="flex items-center justify-center h-screen text-lg text-gray-500">
         Checking session...

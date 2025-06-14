@@ -1,103 +1,114 @@
+import React from 'react';
 import AllocationsSection from './AllocationsSection';
 import OneTimeDepositsSection from './OneTimeDepositsSection';
 import MonthlyDepositsSection from './MonthlyDepositsSection';
 import SimulationSection from './SimulationSection';
+import { fetchAssetData } from '../utils/calcMetrics';
 
 export default function PortfolioPage({ portfolio, updatePortfolio }) {
-  const fetchAssetData = async (symbol) => {
-    try {
-      const [priceRes, profileRes] = await Promise.all([
-        fetch(`https://yfinance-backend.onrender.com/api/price-history?symbol=${symbol}&period=5y`),
-        fetch(`https://yfinance-backend.onrender.com/api/profile?symbol=${symbol}`)
-      ]);
+  // Centralized updater
+  const update = (patch) => updatePortfolio({ ...portfolio, ...patch });
 
-      const priceData = await priceRes.json();
-      const profileData = await profileRes.json();
-
-      if (!priceData.prices || priceData.prices.length < 2) {
-        throw new Error('Not enough price data');
-      }
-
-      const firstPrice = priceData.prices[0];
-      const lastPrice = priceData.prices[priceData.prices.length - 1];
-      const years = 5;
-      const cagr = Math.pow(lastPrice / firstPrice, 1 / years) - 1;
-
-      const returns = priceData.prices
-        .slice(1)
-        .map((p, i) => (p - priceData.prices[i]) / priceData.prices[i]);
-      const meanReturn = returns.reduce((sum, r) => sum + r, 0) / returns.length;
-      const variance =
-        returns.reduce((sum, r) => sum + Math.pow(r - meanReturn, 2), 0) /
-        (returns.length - 1);
-      const volatility = Math.sqrt(variance) * Math.sqrt(252);
-
-      const description =
-        profileData?.longBusinessSummary ||
-        profileData?.shortName ||
-        profileData?.symbol ||
-        'Unknown Company';
-
-      return { cagr, volatility, description };
-    } catch (error) {
-      console.error(`Failed to fetch data for ${symbol}`, error);
-      throw new Error(`Unable to fetch data for ${symbol}`);
-    }
-  };
-
+  // Section update handlers
   const handleAllocationsUpdate = (allocations) => {
-    updatePortfolio({
-      ...portfolio,
-      allocations,
-      simulationResult: null,
-    });
+    update({ allocations, simulationResult: null });
   };
-
   const handleOneTimeDepositsUpdate = (oneTimeDeposits) => {
-    updatePortfolio({
-      ...portfolio,
-      oneTimeDeposits,
-      simulationResult: null,
-    });
+    update({ oneTimeDeposits, simulationResult: null });
   };
-
   const handleMonthlyChangesUpdate = (monthlyChanges) => {
-    updatePortfolio({
-      ...portfolio,
-      monthlyChanges,
-      simulationResult: null,
-    });
+    update({ monthlyChanges, simulationResult: null });
   };
 
-  const handleSimulationComplete = (simulationResult) => {
-    updatePortfolio({
-      ...portfolio,
-      simulationResult,
-    });
+  // Toggle "Is Pension"
+  const handlePensionToggle = () => {
+    update({ isPension: !portfolio.isPension });
+  };
+
+  // Run simulation (propagates loading state)
+  const runSimulation = async () => {
+    update({ isSimulating: true });
+    try {
+      const payload = {
+        allocations: portfolio.allocations.map((a) => ({
+          allocation: a.allocation,
+          cagr:
+            a.cagrType === '10Y'
+              ? a.cagr10Y
+              : a.cagrType === 'Blended'
+              ? a.cagrBlended
+              : a.cagr5Y,
+          volatility:
+            a.cagrType === '10Y'
+              ? a.volatility10Y
+              : a.cagrType === 'Blended'
+              ? a.volatilityBlended
+              : a.volatility5Y,
+        })),
+        oneTimeDeposits: portfolio.oneTimeDeposits,
+        monthlyChanges: portfolio.monthlyChanges,
+      };
+
+      const res = await fetch(
+        'https://investment-dashboard-backend-gm79.onrender.com/api/simulate',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }
+      );
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Simulation failed');
+      }
+      const result = await res.json();
+      update({ simulationResult: result, isSimulating: false });
+    } catch (e) {
+      console.error('Simulation error:', e);
+      update({ isSimulating: false });
+    }
   };
 
   return (
     <div>
-      <h1 className="text-2xl mb-4">{portfolio.name}</h1>
+      {/* Header with title and pension toggle */}
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-2xl font-bold">{portfolio.name}</h1>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={!!portfolio.isPension}
+            onChange={handlePensionToggle}
+            className="h-5 w-5 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+          />
+          <span className="text-sm font-medium text-gray-700">Is Pension</span>
+        </label>
+      </div>
+
       <AllocationsSection
         allocations={portfolio.allocations}
         setAllocations={handleAllocationsUpdate}
         fetchAssetData={fetchAssetData}
       />
+
       <OneTimeDepositsSection
         deposits={portfolio.oneTimeDeposits}
         setDeposits={handleOneTimeDepositsUpdate}
       />
+
       <MonthlyDepositsSection
         changes={portfolio.monthlyChanges}
         setChanges={handleMonthlyChangesUpdate}
       />
+
       <SimulationSection
         allocations={portfolio.allocations}
         oneTimeDeposits={portfolio.oneTimeDeposits}
         monthlyChanges={portfolio.monthlyChanges}
         existingResult={portfolio.simulationResult}
-        onComplete={handleSimulationComplete}
+        isPension={portfolio.isPension}
+        loading={!!portfolio.isSimulating}
+        onRun={runSimulation}
       />
     </div>
   );

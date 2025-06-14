@@ -1,6 +1,7 @@
-import { useState } from 'react';
-import { Button } from './ui/Button';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card } from './ui/Card';
+import { Button } from './ui/Button';
+import Tooltip from './ui/Tooltip';
 
 export default function AllocationsSection({
   allocations,
@@ -9,7 +10,32 @@ export default function AllocationsSection({
 }) {
   const [symbolInput, setSymbolInput] = useState('');
   const [error, setError] = useState('');
+  const [localAllocations, setLocalAllocations] = useState(allocations);
 
+  // Update local state when props change
+  useEffect(() => {
+    setLocalAllocations(allocations);
+  }, [allocations]);
+
+  // Debounced update to parent
+  const debouncedUpdate = useCallback(
+    (newAllocations) => {
+      const timer = setTimeout(() => {
+        if (JSON.stringify(newAllocations) !== JSON.stringify(allocations)) {
+          setAllocations(newAllocations);
+        }
+      }, 1000);
+      return () => clearTimeout(timer);
+    },
+    [allocations, setAllocations]
+  );
+
+  // Update parent when local allocations change
+  useEffect(() => {
+    return debouncedUpdate(localAllocations);
+  }, [localAllocations, debouncedUpdate]);
+
+  // Add a new asset to the allocations list
   const handleAddAsset = async () => {
     if (!symbolInput.trim()) return;
     try {
@@ -22,7 +48,8 @@ export default function AllocationsSection({
         volatility: data.volatility,
         allocation: 0,
       };
-      setAllocations([...allocations, newAsset]);
+      const updated = [...localAllocations, newAsset];
+      setLocalAllocations(updated);
       setSymbolInput('');
       setError('');
     } catch (e) {
@@ -30,34 +57,74 @@ export default function AllocationsSection({
     }
   };
 
+  // Remove an asset by its ID
+  const handleRemoveAsset = (id) => {
+    const updated = localAllocations.filter((a) => a.id !== id);
+    setLocalAllocations(updated);
+  };
+
+  // Change allocation % in-line
   const handleAllocationChange = (id, value) => {
-    setAllocations(
-      allocations.map((a) =>
+    const numValue = parseFloat(value);
+    if (isNaN(numValue)) return;
+    
+    setLocalAllocations(
+      localAllocations.map((a) =>
         a.id === id
-          ? { ...a, allocation: parseFloat(value) >= 0 ? parseFloat(value) : 0 }
+          ? { ...a, allocation: numValue >= 0 ? numValue : 0 }
           : a
       )
     );
   };
 
+  // Rebalance everything to sum to 100%
   const handleRebalance = () => {
-    const total = allocations.reduce((sum, a) => sum + a.allocation, 0);
+    const total = localAllocations.reduce((sum, a) => sum + a.allocation, 0);
     if (total === 0) return;
-    setAllocations(
-      allocations.map((a) => ({
-        ...a,
-        allocation: parseFloat(((a.allocation / total) * 100).toFixed(2)),
-      }))
+    const updated = localAllocations.map((a) => ({
+      ...a,
+      allocation: parseFloat(((a.allocation / total) * 100).toFixed(2)),
+    }));
+    setLocalAllocations(updated);
+  };
+
+  // Helpers to display the chosen CAGR & Volatility
+  const getDisplayCagr = (a) => {
+    switch (a.cagrType) {
+      case '10Y':
+        return a.cagr10Y;
+      case 'Blended':
+        return a.cagrBlended;
+      case '5Y':
+      default:
+        return a.cagr5Y;
+    }
+  };
+  const getDisplayVol = (a) => {
+    switch (a.cagrType) {
+      case '10Y':
+        return a.volatility10Y;
+      case 'Blended':
+        return a.volatilityBlended;
+      case '5Y':
+      default:
+        return a.volatility5Y;
+    }
+  };
+
+  // Switch between 5Y / 10Y / Blended without re-running simulation
+  const handleTypeChange = (id, type) => {
+    setLocalAllocations(
+      localAllocations.map((a) =>
+        a.id === id ? { ...a, cagrType: type } : a
+      )
     );
   };
 
-  const handleRemove = (id) => {
-    setAllocations(allocations.filter((a) => a.id !== id));
-  };
-
   return (
-    <Card>
-      <h2 className="text-2xl font-bold mb-4">Allocations</h2>
+    <Card className="mb-4">
+      <h2 className="text-lg font-semibold mb-2">Allocations</h2>
+
       <div className="flex mb-4 gap-2">
         <input
           type="text"
@@ -68,31 +135,48 @@ export default function AllocationsSection({
         />
         <Button onClick={handleAddAsset}>Add</Button>
       </div>
+
       {error && <div className="text-red-500 mb-4">{error}</div>}
-      <table className="w-full text-sm text-gray-700 border border-gray-200 rounded overflow-hidden">
-        <thead className="bg-gray-100 text-gray-800">
+
+      <table className="w-full text-sm text-gray-700 border rounded overflow-hidden">
+        <thead className="bg-gray-100">
           <tr>
-            <th className="p-3 text-left">Symbol</th>
-            <th className="p-3 text-left w-1/3">Description</th>
-            <th className="p-3 text-right">CAGR %</th>
-            <th className="p-3 text-right">Volatility %</th>
-            <th className="p-3 text-right">Allocation %</th>
-            <th className="p-3 text-center"></th>
+            <th className="p-2 text-left">Symbol</th>
+            <th className="p-2 text-left">Description</th>
+            <th className="p-2 text-right">
+              CAGR % <Tooltip content="Select 5Y, 10Y, or Blended">ℹ️</Tooltip>
+            </th>
+            <th className="p-2 text-center">Type</th>
+            <th className="p-2 text-right">
+              Vol % <Tooltip content="Annualized vol over selected window">ℹ️</Tooltip>
+            </th>
+            <th className="p-2 text-right">Allocation %</th>
+            <th className="p-2"></th>
           </tr>
         </thead>
         <tbody>
-          {allocations.map((a, index) => (
-            <tr
-              key={a.id}
-              className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}
-            >
-              <td className="p-3 font-bold">{a.symbol}</td>
-              <td className="p-3">{a.description || '-'}</td>
-              <td className="p-3 text-right">{(a.cagr * 100).toFixed(2)}</td>
-              <td className="p-3 text-right">
-                {(a.volatility * 100).toFixed(2)}
+          {localAllocations.map((a, i) => (
+            <tr key={a.id} className={i % 2 ? 'bg-white' : 'bg-gray-50'}>
+              <td className="p-2 font-bold">{a.symbol}</td>
+              <td className="p-2">{a.description || '-'}</td>
+              <td className="p-2 text-right">
+                {(getDisplayCagr(a) * 100).toFixed(2)}
               </td>
-              <td className="p-3 text-right">
+              <td className="p-2 text-center">
+                <select
+                  value={a.cagrType}
+                  onChange={(e) => handleTypeChange(a.id, e.target.value)}
+                  className="border rounded p-1"
+                >
+                  <option value="5Y">5Y</option>
+                  <option value="10Y">10Y</option>
+                  <option value="Blended">Blended</option>
+                </select>
+              </td>
+              <td className="p-2 text-right">
+                {(getDisplayVol(a) * 100).toFixed(2)}
+              </td>
+              <td className="p-2 text-right">
                 <input
                   type="number"
                   step="0.01"
@@ -102,8 +186,11 @@ export default function AllocationsSection({
                   onChange={(e) => handleAllocationChange(a.id, e.target.value)}
                 />
               </td>
-              <td className="p-3 text-center">
-                <Button onClick={() => handleRemove(a.id)} variant="danger">
+              <td className="p-2">
+                <Button
+                  onClick={() => handleRemoveAsset(a.id)}
+                  variant="danger"
+                >
                   Remove
                 </Button>
               </td>
@@ -111,8 +198,9 @@ export default function AllocationsSection({
           ))}
         </tbody>
       </table>
-      {allocations.length > 0 && (
-        <Button onClick={handleRebalance} variant="green" className="mt-6">
+
+      {localAllocations.length > 0 && (
+        <Button onClick={handleRebalance} variant="green" className="mt-4">
           Rebalance to 100%
         </Button>
       )}

@@ -1,168 +1,121 @@
-import { useState, useEffect } from 'react';
+import React, { useMemo } from 'react';
 import ReactECharts from 'echarts-for-react';
+import { Card } from './ui/Card';
 import { Button } from './ui/Button';
 
+/**
+ * Props:
+ * - allocations: Array<{ allocation, cagrType, cagr5Y, cagr10Y, cagrBlended, volatility5Y, volatility10Y, volatilityBlended }>
+ * - oneTimeDeposits: Array<{ id, amount, date }>
+ * - monthlyChanges: Array<{ id, amount, date }>
+ * - existingResult: {
+ *     simulationStartDate: string,
+ *     months: number[],
+ *     median: number[],
+ *     percentile10: number[],
+ *     percentile90: number[]
+ *   }
+ * - isPension: boolean
+ * - loading: boolean
+ * - onRun: () => void
+ */
 export default function SimulationSection({
   allocations,
   oneTimeDeposits,
   monthlyChanges,
   existingResult,
-  onComplete,
+  isPension,
+  loading,
+  onRun,
 }) {
-  const [result, setResult] = useState(existingResult || null);
-  const [loading, setLoading] = useState(false);
+  // Determine tax rate: pension=35%, otherwise 0%
+  const taxRate = isPension ? 0.35 : 0;
 
-  useEffect(() => {
-    setResult(existingResult || null);
-  }, [existingResult, allocations, oneTimeDeposits, monthlyChanges]);
+  // Pick the right metric
+  const pickCagr = (a) =>
+    a.cagrType === '10Y'
+      ? a.cagr10Y
+      : a.cagrType === 'Blended'
+      ? a.cagrBlended
+      : a.cagr5Y;
+  const pickVol = (a) =>
+    a.cagrType === '10Y'
+      ? a.volatility10Y
+      : a.cagrType === 'Blended'
+      ? a.volatilityBlended
+      : a.volatility5Y;
 
-  const handleRunSimulation = async () => {
-    if (!allocations.length) return;
-    setLoading(true);
-    try {
-      const response = await fetch(
-        'https://investment-dashboard-backend-gm79.onrender.com/api/simulate',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            allocations,
-            oneTimeDeposits,
-            monthlyChanges,
-            cycles: 15000,
-            years: 15,
-          }),
-        }
-      );
-      const data = await response.json();
-      setResult(data);
-      onComplete(data);
-    } catch (error) {
-      console.error('Simulation failed:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Build chart option
+  const option = useMemo(() => {
+    if (!existingResult) return null;
+    const { simulationStartDate, months, median, percentile10, percentile90 } = existingResult;
 
-  const currencyFormatter = new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'ILS',
-    notation: 'standard',
-    maximumFractionDigits: 0,
-  });
+    // Generate X-axis labels
+    const start = new Date(simulationStartDate);
+    const labels = months.map((m) => {
+      const d = new Date(start);
+      d.setMonth(d.getMonth() + m);
+      return d.toLocaleString('default', { month: 'short', year: 'numeric' });
+    });
 
-  const formatDateLabel = (startDateStr, monthOffset) => {
-    const date = new Date(startDateStr);
-    date.setMonth(date.getMonth() + monthOffset);
-    return date.toLocaleString('default', { month: 'short', year: 'numeric' });
-  };
-
-  const getOption = () => {
-    if (!result || !result.mean) return {};
-
-    const months = result.months || [];
-    const startDateStr = result.simulationStartDate || '2025-01-01';
+    // Define display order
+    const order = ['Median', '10th PCT', '90th PCT'];
 
     return {
-      title: {
-        text: 'Monte Carlo 15Y Projection (Monthly)',
-        left: 'center',
-        top: 20,
-        textStyle: {
-          color: '#1f2937'
-        }
+      toolbox: {
+        feature: { dataZoom: { yAxisIndex: false }, restore: {}, saveAsImage: {} },
       },
+      dataZoom: [
+        { type: 'slider', start: 0, end: 100 },
+        { type: 'inside', start: 0, end: 100 },
+      ],
+      xAxis: { type: 'category', data: labels, axisPointer: { type: 'shadow' } },
+      yAxis: { type: 'value', axisLabel: { formatter: (v) => `₪${v.toLocaleString()}` } },
       tooltip: {
         trigger: 'axis',
         formatter: (params) => {
-          const monthIndex = params[0]?.dataIndex || 0;
-          const date = new Date(startDateStr);
-          date.setMonth(date.getMonth() + monthIndex);
-          const monthYear = date.toLocaleString('default', {
-            month: 'short',
-            year: 'numeric',
+          const idx = params[0].dataIndex;
+          const offset = months[idx];
+          const yrs = Math.floor(offset / 12);
+          const mos = offset % 12;
+          const label = labels[idx];
+
+          let s = `<strong>${yrs} Years${mos ? ` ${mos} Months` : ''} (${label})</strong><br/>`;
+
+          order.forEach((seriesName) => {
+            const p = params.find((pt) => pt.seriesName === seriesName);
+            if (!p) return;
+            const total = p.data;
+            const afterTax = Math.round(total * (1 - taxRate));
+            const monthly = Math.round((afterTax * 0.04) / 12);
+
+            let line = `${p.marker} <strong>${seriesName}:</strong> ₪${monthly.toLocaleString()} safe monthly (₪${total.toLocaleString()}`;
+            if (taxRate > 0) {
+              line += ` / ₪${afterTax.toLocaleString()} after tax`;
+            }
+            line += `)`;
+
+            s += `${line}<br/>`;
           });
-          return (
-            `<strong>${monthYear}</strong><br>` +
-            params
-              .map((p) => `${p.seriesName}: ${currencyFormatter.format(p.value)}`)
-              .join('<br>')
-          );
-        }
-      },
-      grid: {
-        left: '5%',
-        right: '5%',
-        bottom: '15%',
-        top: '15%',
-        containLabel: true
-      },
-      xAxis: {
-        type: 'category',
-        data: months.map((m) => formatDateLabel(startDateStr, m)),
-        axisLabel: {
-          color: '#4b5563'
-        }
-      },
-      yAxis: {
-        type: 'value',
-        axisLabel: {
-          formatter: (value) => currencyFormatter.format(value),
-          color: '#4b5563'
-        }
+
+          return s;
+        },
       },
       series: [
-        {
-          name: 'Mean',
-          data: result.mean,
-          type: 'line',
-          smooth: true,
-          lineStyle: { width: 2 }
-        },
-        {
-          name: 'Median',
-          data: result.median,
-          type: 'line',
-          smooth: true,
-          lineStyle: { width: 2 }
-        },
-        {
-          name: '10th Percentile',
-          data: result.percentile10,
-          type: 'line',
-          smooth: true,
-          lineStyle: { width: 2 }
-        },
-        {
-          name: '90th Percentile',
-          data: result.percentile90,
-          type: 'line',
-          smooth: true,
-          lineStyle: { width: 2 }
-        }
+        { name: '10th PCT', data: percentile10, type: 'line', showSymbol: true },
+        { name: 'Median', data: median, type: 'line', showSymbol: true },
+        { name: '90th PCT', data: percentile90, type: 'line', showSymbol: true },
       ],
-      dataZoom: [
-        { type: 'inside', start: 0, end: 100 },
-        { type: 'slider', start: 0, end: 100 }
-      ]
     };
-  };
+  }, [existingResult, isPension]);
 
   return (
-    <div className="mt-6">
-      <h2 className="text-xl font-bold mb-2 text-gray-900">Simulation</h2>
-      {!result && !loading && (
-        <Button onClick={handleRunSimulation}>Run Simulation</Button>
-      )}
-      {loading && <div className="mt-4 text-gray-700">Simulating... Please wait.</div>}
-      {result && !loading && (
-        <>
-          <ReactECharts option={getOption()} style={{ height: 400 }} />
-          <Button onClick={handleRunSimulation} className="mt-4">
-            Rerun Simulation
-          </Button>
-        </>
-      )}
-    </div>
+    <Card>
+      <h2 className="text-lg font-semibold mb-4">Simulation</h2>
+      <Button onClick={onRun} disabled={loading}>
+        {loading ? 'Running...' : 'Run Simulation'}
+      </Button>
+      {option && <ReactECharts option={option} style={{ height: '400px' }} />}
+    </Card>
   );
 }
