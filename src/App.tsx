@@ -1,45 +1,54 @@
 import { useState } from 'react';
+import { useSupabaseUser } from './hooks/useSupabaseUser';
+import { useSupabasePortfolios } from './hooks/useSupabasePortfolios';
 import { supabase } from './utils/supabaseClient';
 import PortfolioPage from './components/PortfolioPage';
 import SummaryPage from './components/SummaryPage';
 import { Button } from './components/ui/Button';
 import AuthWrapper from './components/AuthWrapper';
-import { useLocalPortfolios } from './hooks/useLocalPortfolios'; // Separate clean hook
 
-const USE_GOOGLE_AUTH = false; // Toggle this true/false ONLY
+const USE_GOOGLE_AUTH = false; // 👈 Toggle this to false to disable Google Auth and fallback to local mode
 
 export default function App() {
+  const { user, loading: authLoading } = useSupabaseUser();
+  const {
+    portfolios,
+    savePortfolio,
+    deletePortfolio,
+    loading: portfoliosLoading,
+  } = useSupabasePortfolios(USE_GOOGLE_AUTH ? user : { id: 'local-user' });
+
   const [selectedId, setSelectedId] = useState('summary');
 
-  // --- Google Sign-In Mode (DISABLED in your case) ---
   if (USE_GOOGLE_AUTH) {
-    // Place the entire Google logic inside this block.
-    // If false, NONE of this is even mounted.
-    // Do not run the user hook outside this.
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <button
-          onClick={() => supabase.auth.signInWithOAuth({ provider: 'google' })}
-          className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-        >
-          Sign In with Google
-        </button>
-      </div>
-    );
+    if (authLoading)
+      return (
+        <div className="flex items-center justify-center h-screen">
+          Checking authentication...
+        </div>
+      );
+
+    if (!user) {
+      return (
+        <div className="flex items-center justify-center h-screen">
+          <button
+            onClick={() => supabase.auth.signInWithOAuth({ provider: 'google' })}
+            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+          >
+            Sign In with Google
+          </button>
+        </div>
+      );
+    }
   }
 
-  // --- Local Mode ---
-  const { portfolios, savePortfolio, deletePortfolio, loading } =
-    useLocalPortfolios();
-
-  if (loading)
+  if (portfoliosLoading)
     return (
       <div className="flex items-center justify-center h-screen">
         Loading portfolios...
       </div>
     );
 
-  // Same as before...
   const handleAddPortfolio = async () => {
     const id = 'portfolio-' + Date.now();
     await savePortfolio({
