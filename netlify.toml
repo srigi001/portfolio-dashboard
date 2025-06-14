@@ -2,6 +2,9 @@
   command = "npm run build"
   publish = "dist"
 
+[build.environment]
+  VITE_USE_GOOGLE_AUTH = "true"
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
