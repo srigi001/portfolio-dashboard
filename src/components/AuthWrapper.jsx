@@ -1,6 +1,6 @@
 import { useSupabaseUser } from '../hooks/useSupabaseUser';
 import { supabase } from '../utils/supabaseClient';
-import { USE_GOOGLE_AUTH } from '../utils/config';
+import { USE_GOOGLE_AUTH, API_BASE_URL } from '../utils/config';
 
 export default function AuthWrapper({ children }) {
   if (!USE_GOOGLE_AUTH) {
@@ -26,11 +26,14 @@ export default function AuthWrapper({ children }) {
             supabase.auth.signInWithOAuth({
               provider: 'google',
               options: {
-                redirectTo: window.location.origin,
+                redirectTo: API_BASE_URL,
+                queryParams: {
+                  redirect_to: API_BASE_URL
+                }
               },
             })
           }
-          className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+          className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
         >
           Sign In with Google
         </button>

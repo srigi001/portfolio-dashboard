@@ -1,9 +1,6 @@
 [build]
-  command = "VITE_USE_GOOGLE_AUTH=true npm run build"
+  command = "npm run build"
   publish = "dist"
-
-[build.environment]
-  VITE_USE_GOOGLE_AUTH = "true"
 
 [[redirects]]
   from = "/*"

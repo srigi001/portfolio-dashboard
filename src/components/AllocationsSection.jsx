@@ -44,8 +44,15 @@ export default function AllocationsSection({
         id: Date.now().toString(),
         symbol: symbolInput.toUpperCase(),
         description: data.description,
-        cagr: data.cagr,
-        volatility: data.volatility,
+        cagr1Y: data.cagr1Y,
+        cagr5Y: data.cagr5Y,
+        cagr10Y: data.cagr10Y,
+        cagrBlended: data.cagrBlended,
+        volatility1Y: data.volatility1Y,
+        volatility5Y: data.volatility5Y,
+        volatility10Y: data.volatility10Y,
+        volatilityBlended: data.volatilityBlended,
+        cagrType: '5Y', // default selection
         allocation: 0,
       };
       const updated = [...localAllocations, newAsset];
