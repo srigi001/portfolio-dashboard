@@ -145,6 +145,8 @@ export default function App() {
           onDeletePortfolio={handleDeletePortfolio}
           onDuplicatePortfolio={handleDuplicatePortfolio}
           onReorder={handleReorder}
+          onLogout={() => supabase.auth.signOut()}
+          showLogout={USE_GOOGLE_AUTH && user}
         />
       </div>
 
@@ -157,16 +159,6 @@ export default function App() {
       )}
 
       <main className="flex-1 overflow-auto p-2 md:p-6 bg-gray-100">
-        {USE_GOOGLE_AUTH && user && (
-          <div className="absolute top-4 right-4 z-30">
-            <Button
-              onClick={() => supabase.auth.signOut()}
-              variant="secondary"
-            >
-              Log Out
-            </Button>
-          </div>
-        )}
         {selectedId === 'summary' || !active ? (
           <SummaryPage portfolios={portfolios} />
         ) : (

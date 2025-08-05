@@ -136,8 +136,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Deployment
 
-The application is deployed on Netlify and can be accessed at: https://resonant-blini-abe60a.netlify.app
-
+The application is deployed on Netlify and can be accessed at: https://portfolio-prophet.netlify.app
 ## Support
 
 For support, please open an issue in the GitHub repository or contact the development team.

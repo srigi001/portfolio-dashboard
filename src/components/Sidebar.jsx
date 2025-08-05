@@ -12,6 +12,8 @@ import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
  * - onDeletePortfolio: (id: string) => void
  * - onDuplicatePortfolio: (id: string) => void
  * - onReorder: (newList) => void
+ * - onLogout: () => void
+ * - showLogout: boolean
  */
 export default function Sidebar({
   portfolios,
@@ -22,6 +24,8 @@ export default function Sidebar({
   onDeletePortfolio,
   onDuplicatePortfolio,
   onReorder,
+  onLogout,
+  showLogout,
 }) {
   const [menuState, setMenuState] = useState({ id: null, x: 0, y: 0 });
   const menuRef = useRef(null);
@@ -76,43 +80,44 @@ export default function Sidebar({
         <h2 className="text-lg font-semibold">Summary</h2>
       </div>
 
-      <DragDropContext onDragEnd={handleDragEnd}>
-        <Droppable droppableId="sidebar-droppable">
-          {(provided) => (
-            <ul
-              {...provided.droppableProps}
-              ref={provided.innerRef}
-              className="flex-1 overflow-y-auto"
-            >
-              {portfolios.map((p, idx) => (
-                <Draggable key={p.id} draggableId={p.id} index={idx}>
-                  {(prov) => (
-                    <li
-                      ref={prov.innerRef}
-                      {...prov.draggableProps}
-                      {...prov.dragHandleProps}
-                      className={`flex items-center justify-between px-4 py-2 cursor-move hover:bg-gray-700 ${
-                        activeId === p.id ? 'bg-gray-700 font-medium' : ''
-                      }`}
-                      onClick={() => onSelect(p.id)}
-                    >
-                      <span className="truncate">{p.name}</span>
-                      <button
-                        onClick={(e) => openMenu(e, p.id)}
-                        className="p-1 hover:bg-gray-600 rounded"
-                        aria-label="Options"
+      <div className="flex-1 overflow-y-auto">
+        <DragDropContext onDragEnd={handleDragEnd}>
+          <Droppable droppableId="sidebar-droppable">
+            {(provided) => (
+              <ul
+                {...provided.droppableProps}
+                ref={provided.innerRef}
+              >
+                {portfolios.map((p, idx) => (
+                  <Draggable key={p.id} draggableId={p.id} index={idx}>
+                    {(prov) => (
+                      <li
+                        ref={prov.innerRef}
+                        {...prov.draggableProps}
+                        {...prov.dragHandleProps}
+                        className={`flex items-center justify-between px-4 py-2 cursor-move hover:bg-gray-700 ${
+                          activeId === p.id ? 'bg-gray-700 font-medium' : ''
+                        }`}
+                        onClick={() => onSelect(p.id)}
                       >
-                        <MoreVertical className="w-5 h-5 text-gray-400" />
-                      </button>
-                    </li>
-                  )}
-                </Draggable>
-              ))}
-              {provided.placeholder}
-            </ul>
-          )}
-        </Droppable>
-      </DragDropContext>
+                        <span className="truncate">{p.name}</span>
+                        <button
+                          onClick={(e) => openMenu(e, p.id)}
+                          className="p-1 hover:bg-gray-600 rounded"
+                          aria-label="Options"
+                        >
+                          <MoreVertical className="w-5 h-5 text-gray-400" />
+                        </button>
+                      </li>
+                    )}
+                  </Draggable>
+                ))}
+                {provided.placeholder}
+              </ul>
+            )}
+          </Droppable>
+        </DragDropContext>
+      </div>
 
       {menuState.id && (
         <div
@@ -149,13 +154,26 @@ export default function Sidebar({
         </div>
       )}
 
-      <div className="px-4 py-3 border-t border-gray-700">
-        <button
-          onClick={onAddPortfolio}
-          className="w-full flex items-center justify-center gap-2 bg-green-500 hover:bg-green-600 text-white py-2 rounded"
-        >
-          <Plus className="w-4 h-4" /> New Portfolio
-        </button>
+      {/* Footer */}
+      <div>
+        <div className="px-4 py-3 border-t border-gray-700">
+          <button
+            onClick={onAddPortfolio}
+            className="w-full flex items-center justify-center gap-2 bg-green-500 hover:bg-green-600 text-white py-2 rounded"
+          >
+            <Plus className="w-4 h-4" /> New Portfolio
+          </button>
+        </div>
+        {showLogout && (
+          <div className="px-4 py-3">
+            <button
+              onClick={onLogout}
+              className="w-full flex items-center justify-center gap-2 hover:bg-gray-700 text-gray-200 py-2 rounded"
+            >
+              Log Out
+            </button>
+          </div>
+        )}
       </div>
     </aside>
   );

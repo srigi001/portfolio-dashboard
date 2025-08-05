@@ -88,33 +88,50 @@ export default function SummaryPage({ portfolios }) {
           const mos = offset % 12;
           const date = dayjs().add(offset, 'month');
 
-          let s = `<strong>${date.format('MMM YYYY')} — ${yrs} year${
-            yrs !== 1 ? 's' : ''
-          }${
-            mos ? ` and ${mos} month${mos !== 1 ? 's' : ''}` : ''
-          } from now</strong><br/>`;
+          const titleParts = [];
+          if (yrs > 0) {
+            titleParts.push(`${yrs} Year${yrs !== 1 ? 's' : ''}`);
+          }
+          if (mos > 0) {
+            titleParts.push(`${mos} Month${mos !== 1 ? 's' : ''}`);
+          }
+          const relativeTime = titleParts.join(' ');
+          const titleDate = date.format('MMM YYYY');
 
-          // Display in order: median, 10th, 90th
-          const order = ['50th PCT', '10th PCT', '90th PCT'];
-          order.forEach((seriesName) => {
-            const p = params.find((pt) => pt.seriesName === seriesName);
+          let s = `<strong>${relativeTime}</strong> (${titleDate})<br/>`;
+
+          const formatIls = (v) =>
+            `${Math.round(v).toLocaleString('en-US', {
+              maximumFractionDigits: 0,
+            })}₪`;
+
+          const order = [
+            { current: '50th PCT', new: 'Median' },
+            { current: '10th PCT', new: '10th' },
+            { current: '90th PCT', new: '90th' },
+          ];
+
+          order.forEach(({ current, new: newLabel }) => {
+            const p = params.find((pt) => pt.seriesName === current);
             if (!p) return;
-            const before = p.data;
-            let line = `${p.marker} ${seriesName}: ${formatCurrency(before)}`;
-            // Only append after-tax if at least one hasTax
-            if (hasTax) {
-              const afterVal =
-                seriesName === '10th PCT'
-                  ? p10_after[idx]
-                  : seriesName === '50th PCT'
-                  ? p50_after[idx]
-                  : p90_after[idx];
-              line += ` (${formatCurrency(afterVal)} after tax)`;
+
+            const total = p.data;
+            const monthly = total / 300;
+
+            const formattedMonthly = formatIls(monthly);
+            const formattedTotal = formatIls(total);
+
+            let line;
+            if (newLabel === 'Median') {
+              line = `${
+                p.marker
+              } ${newLabel}: <strong>${formattedMonthly} safe monthly</strong> (${formattedTotal} total)`;
+            } else {
+              line = `${
+                p.marker
+              } ${newLabel}: ${formattedMonthly} safe monthly (${formattedTotal} total)`;
             }
-            s +=
-              seriesName === '50th PCT'
-                ? `<strong>${line}</strong><br/>`
-                : `${line}<br/>`;
+            s += `${line}<br/>`;
           });
 
           return s;
