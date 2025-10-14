@@ -1,8 +1,10 @@
 import React, { useState, useMemo } from 'react';
 import ReactECharts from 'echarts-for-react';
 import dayjs from 'dayjs';
+// import CSVImportSection from './CSVImportSection';
+// import GoogleSheetsImport from './GoogleSheetsImport';
 
-export default function SummaryPage({ portfolios }) {
+export default function SummaryPage({ portfolios, onImportPortfolio }) {
   const [visibleIds, setVisibleIds] = useState(portfolios.map((p) => p.id));
 
   const aggregated = useMemo(() => {
@@ -138,49 +140,46 @@ export default function SummaryPage({ portfolios }) {
         },
       },
       grid: {
-        left: '5%',
-        right: '5%',
-        bottom: '15%',
-        top: '15%',
+        left: '3%',
+        right: '4%',
+        bottom: '3%',
         containLabel: true,
       },
       xAxis: {
         type: 'category',
-        data: aggregated.months.map((m) =>
-          dayjs().add(m, 'month').format('MMM YYYY')
-        ),
-        axisLabel: { color: '#4b5563' },
+        data: months.map((m) => {
+          const date = dayjs().add(m, 'month');
+          return date.format('MMM YYYY');
+        }),
       },
       yAxis: {
         type: 'value',
-        axisLabel: { formatter: (v) => formatCurrency(v), color: '#4b5563' },
+        axisLabel: {
+          formatter: (v) => formatCurrency(v),
+        },
       },
       series: [
         {
           name: '10th PCT',
           data: p10,
           type: 'line',
-          smooth: true,
-          lineStyle: { width: 2 },
+          showSymbol: false,
+          lineStyle: { color: '#10b981' },
         },
         {
           name: '50th PCT',
           data: p50,
           type: 'line',
-          smooth: true,
-          lineStyle: { width: 2 },
+          showSymbol: false,
+          lineStyle: { color: '#3b82f6', width: 2 },
         },
         {
           name: '90th PCT',
           data: p90,
           type: 'line',
-          smooth: true,
-          lineStyle: { width: 2 },
+          showSymbol: false,
+          lineStyle: { color: '#ef4444' },
         },
-      ],
-      dataZoom: [
-        { type: 'inside', start: 0, end: 100 },
-        { type: 'slider', start: 0, end: 100 },
       ],
     };
   };
@@ -188,6 +187,7 @@ export default function SummaryPage({ portfolios }) {
   return (
     <div className="w-full h-full flex flex-col p-8">
       <h1 className="text-2xl font-bold mb-6 text-gray-900">Summary</h1>
+      
       {portfolios.length === 0 ? (
         <div className="text-gray-500">No portfolios available yet.</div>
       ) : (

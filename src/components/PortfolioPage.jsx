@@ -27,6 +27,7 @@ export default function PortfolioPage({ portfolio, updatePortfolio }) {
 
   // Run simulation (propagates loading state)
   const runSimulation = async () => {
+    console.log('🚀 Starting simulation...');
     update({ isSimulating: true });
     try {
       const payload = {
@@ -49,6 +50,11 @@ export default function PortfolioPage({ portfolio, updatePortfolio }) {
         monthlyChanges: portfolio.monthlyChanges,
       };
 
+      console.log('📊 Simulation payload:', payload);
+      console.log('📊 Allocations being sent:', payload.allocations);
+      console.log('📊 One-time deposits:', payload.oneTimeDeposits);
+      console.log('📊 Monthly changes:', payload.monthlyChanges);
+
       const res = await fetch(
         'https://investment-dashboard-backend-gm79.onrender.com/api/simulate',
         {
@@ -57,14 +63,26 @@ export default function PortfolioPage({ portfolio, updatePortfolio }) {
           body: JSON.stringify(payload),
         }
       );
+      
+      console.log('📡 Simulation response status:', res.status);
+      
       if (!res.ok) {
         const err = await res.json();
+        console.error('❌ Simulation API error:', err);
         throw new Error(err.error || 'Simulation failed');
       }
+      
       const result = await res.json();
+      console.log('✅ Simulation result received:', result);
+      console.log('📊 Result percentiles:', {
+        '10th': result.percentiles?.['10']?.length || 0,
+        '50th': result.percentiles?.['50']?.length || 0,
+        '90th': result.percentiles?.['90']?.length || 0
+      });
+      
       update({ simulationResult: result, isSimulating: false });
     } catch (e) {
-      console.error('Simulation error:', e);
+      console.error('❌ Simulation error:', e);
       update({ isSimulating: false });
     }
   };

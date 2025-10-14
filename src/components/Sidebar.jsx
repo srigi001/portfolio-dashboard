@@ -26,6 +26,7 @@ export default function Sidebar({
   onReorder,
   onLogout,
   showLogout,
+  user,
 }) {
   const [menuState, setMenuState] = useState({ id: null, x: 0, y: 0 });
   const menuRef = useRef(null);
@@ -75,10 +76,24 @@ export default function Sidebar({
     <aside className="w-64 bg-gray-800 text-gray-200 flex flex-col relative">
       <div
         onClick={() => onSelect('summary')}
-        className="px-4 py-3 border-b border-gray-700 cursor-pointer hover:bg-gray-700"
+        className={`px-4 py-3 border-b border-gray-700 cursor-pointer hover:bg-gray-700 ${
+          activeId === 'summary' ? 'bg-gray-700 font-medium' : ''
+        }`}
       >
         <h2 className="text-lg font-semibold">Summary</h2>
       </div>
+
+      {/* Only show Real Portfolio tab to the owner (srigi001@gmail.com) */}
+      {user?.email === 'srigi001@gmail.com' && (
+        <div
+          onClick={() => onSelect('real-portfolio')}
+          className={`px-4 py-3 border-b border-gray-700 cursor-pointer hover:bg-gray-700 ${
+            activeId === 'real-portfolio' ? 'bg-gray-700 font-medium' : ''
+          }`}
+        >
+          <h2 className="text-lg font-semibold">Real Portfolio</h2>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto">
         <DragDropContext onDragEnd={handleDragEnd}>
