@@ -1,53 +1,87 @@
 import React, { useState, useEffect } from 'react';
+
 import ReactECharts from 'echarts-for-react';
 import dayjs from 'dayjs';
 import { fetchPortfolioData } from '../utils/googleSheets';
 import { fetchAssetData } from '../utils/calcMetrics';
 
 export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) {
+  // Helper function to generate user-specific localStorage keys
+  const getUserKey = (key) => {
+    const userId = user?.id || 'anonymous';
+    return `realPortfolio_${userId}_${key}`;
+  };
+
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState('');
   const [realPortfolioData, setRealPortfolioData] = useState(() => {
-    // Load cached data from localStorage
-    const cached = localStorage.getItem('realPortfolioData');
+    // Load cached data from user-specific localStorage
+    const cached = localStorage.getItem(getUserKey('realPortfolioData'));
     return cached ? JSON.parse(cached) : null;
   });
   const [assetSimulations, setAssetSimulations] = useState(() => {
-    // Load cached simulations from localStorage
-    const cached = localStorage.getItem('assetSimulations');
+    // Load cached simulations from user-specific localStorage
+    const cached = localStorage.getItem(getUserKey('assetSimulations'));
     return cached ? JSON.parse(cached) : {};
   });
   const [simulatingAssets, setSimulatingAssets] = useState(new Set());
   const [cagrTypes, setCagrTypes] = useState(() => {
-    // Load cached CAGR types from localStorage
-    const cached = localStorage.getItem('cagrTypes');
+    // Load cached CAGR types from user-specific localStorage
+    const cached = localStorage.getItem(getUserKey('cagrTypes'));
     return cached ? JSON.parse(cached) : {};
   });
   const [selectedAssets, setSelectedAssets] = useState(() => {
-    // Load cached selected assets from localStorage
-    const cached = localStorage.getItem('selectedAssets');
+    // Load cached selected assets from user-specific localStorage
+    const cached = localStorage.getItem(getUserKey('selectedAssets'));
     return cached ? JSON.parse(cached) : {};
   });
   const [combinedSimulation, setCombinedSimulation] = useState(null);
   const [isRunningCombinedSimulation, setIsRunningCombinedSimulation] = useState(false);
   const [allAssetSimulations, setAllAssetSimulations] = useState(() => {
-    // Load cached all asset simulations from localStorage
-    const cached = localStorage.getItem('allAssetSimulations');
+    // Load cached all asset simulations from user-specific localStorage
+    const cached = localStorage.getItem(getUserKey('allAssetSimulations'));
     return cached ? JSON.parse(cached) : {};
   });
   const [isSimulatingAll, setIsSimulatingAll] = useState(false);
 
-  // Google Sheets configuration - Manual input for security
+  // Google Sheets configuration - User-specific persistence
   const [googleSheetsId, setGoogleSheetsId] = useState(() => {
-    // Load from sessionStorage (clears when browser closes)
-    return sessionStorage.getItem('googleSheetsId') || '';
+    // Load from user-specific localStorage (persists across sessions)
+    return localStorage.getItem(getUserKey('googleSheetsId')) || '';
   });
   const GOOGLE_SHEETS_RANGE = 'Universal!H:M';
 
-  // Persistence functions
+  // Reload all user-specific data when user changes
+  useEffect(() => {
+    if (!user) return;
+
+    // Reload all cached data for the current user
+    const cachedData = localStorage.getItem(getUserKey('realPortfolioData'));
+    const cachedSimulations = localStorage.getItem(getUserKey('assetSimulations'));
+    const cachedCagrTypes = localStorage.getItem(getUserKey('cagrTypes'));
+    const cachedSelectedAssets = localStorage.getItem(getUserKey('selectedAssets'));
+    const cachedAllSimulations = localStorage.getItem(getUserKey('allAssetSimulations'));
+    const cachedSheetsId = localStorage.getItem(getUserKey('googleSheetsId'));
+
+    if (cachedData) setRealPortfolioData(JSON.parse(cachedData));
+    if (cachedSimulations) setAssetSimulations(JSON.parse(cachedSimulations));
+    if (cachedCagrTypes) setCagrTypes(JSON.parse(cachedCagrTypes));
+    if (cachedAllSimulations) setAllAssetSimulations(JSON.parse(cachedAllSimulations));
+    if (cachedSelectedAssets) {
+      const selected = JSON.parse(cachedSelectedAssets);
+      setSelectedAssets(selected);
+    }
+    if (cachedAllSimulations) setAllAssetSimulations(JSON.parse(cachedAllSimulations));
+    if (cachedSheetsId) setGoogleSheetsId(cachedSheetsId);
+
+    console.log('✅ Loaded user-specific cache for:', user.email || user.id);
+    // useEffect watching selectedAssets and allAssetSimulations will automatically rebuild combined simulation
+  }, [user?.id]);
+
+  // Persistence functions - now user-specific
   const saveToLocalStorage = (key, data) => {
     try {
-      localStorage.setItem(key, JSON.stringify(data));
+      localStorage.setItem(getUserKey(key), JSON.stringify(data));
     } catch (error) {
       console.warn('Failed to save to localStorage:', error);
     }
@@ -80,7 +114,7 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
 
   const saveGoogleSheetsId = (id) => {
     setGoogleSheetsId(id);
-    sessionStorage.setItem('googleSheetsId', id);
+    localStorage.setItem(getUserKey('googleSheetsId'), id);
   };
 
   const syncGoogleSheets = async () => {
@@ -248,11 +282,27 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     updateAllAssetSimulations(allSimulations);
     setIsSimulatingAll(false);
     console.log('✅ All assets auto-simulated:', Object.keys(allSimulations));
+    
+    // Auto-select all assets when simulations complete
+    const autoSelectedAssets = {};
+    assets.forEach(asset => {
+      autoSelectedAssets[asset.symbol] = true;
+    });
+    updateSelectedAssets(autoSelectedAssets);
+    console.log('✅ Auto-selected all assets:', Object.keys(autoSelectedAssets));
+    // useEffect will automatically update combined simulation when selectedAssets changes
   };
 
-  const updateCombinedSimulation = () => {
-    // Get selected assets
+  // Effect to update combined simulation whenever selectedAssets or allAssetSimulations change
+  useEffect(() => {
     const selectedAssetSymbols = Object.keys(selectedAssets).filter(symbol => selectedAssets[symbol]);
+    
+    console.log('🔍 useEffect triggered for combined simulation:', {
+      selectedAssetSymbols,
+      availableSimulations: Object.keys(allAssetSimulations),
+      selectedAssetsCount: selectedAssetSymbols.length,
+      simulationsCount: Object.keys(allAssetSimulations).length
+    });
     
     if (selectedAssetSymbols.length === 0) {
       setCombinedSimulation(null);
@@ -264,7 +314,14 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
       .map(symbol => allAssetSimulations[symbol])
       .filter(sim => sim); // Filter out any missing simulations
     
+    console.log('📊 Found simulations for selected assets:', {
+      requested: selectedAssetSymbols,
+      found: selectedSimulations.length,
+      missing: selectedAssetSymbols.length - selectedSimulations.length
+    });
+    
     if (selectedSimulations.length === 0) {
+      console.warn('⚠️ No simulations found for selected assets');
       setCombinedSimulation(null);
       return;
     }
@@ -287,10 +344,10 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
       let sumP90 = 0;
       
       selectedSimulations.forEach(sim => {
-        sumMean += sim.mean[i];
-        sumMedian += sim.median[i];
-        sumP10 += sim.percentile10[i];
-        sumP90 += sim.percentile90[i];
+        sumMean += sim.mean[i] || 0;
+        sumMedian += sim.median[i] || 0;
+        sumP10 += sim.percentile10[i] || 0;
+        sumP90 += sim.percentile90[i] || 0;
       });
       
       combinedResult.mean.push(Math.round(sumMean));
@@ -301,6 +358,12 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     
     console.log(`✅ Updated combined simulation with selected assets:`, selectedAssetSymbols);
     setCombinedSimulation(combinedResult);
+  }, [selectedAssets, allAssetSimulations]);
+
+  const updateCombinedSimulation = () => {
+    // This function is now a no-op - the useEffect handles updates
+    // But we keep it for backward compatibility with setTimeout calls
+    // The useEffect will automatically trigger when state changes
   };
 
   const runAssetSimulation = async (asset) => {
@@ -802,6 +865,9 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
       {/* Google Sheets Sync Section */}
       <div className="bg-white rounded-lg shadow-md p-6 mb-6">
         <h2 className="text-lg font-semibold mb-4">Google Sheets Sync</h2>
+        <p className="text-sm text-gray-600 mb-4">
+          💾 All data is automatically saved to your profile and will persist across sessions. When you return, simply click "Update Portfolio" to refresh with the latest data.
+        </p>
         
         <div className="space-y-4">
           {/* Manual Google Sheets ID Input */}
@@ -817,6 +883,11 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
                 placeholder="Enter your Google Sheets ID (e.g., 1ABC123DEF456...)"
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
+              {googleSheetsId && (
+                <p className="mt-1 text-xs text-gray-500">
+                  ✓ Saved to your profile
+                </p>
+              )}
             </div>
           </div>
 
@@ -839,12 +910,18 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
 
             <button
               onClick={() => {
-                localStorage.removeItem('realPortfolioData');
-                localStorage.removeItem('assetSimulations');
-                localStorage.removeItem('cagrTypes');
+                localStorage.removeItem(getUserKey('realPortfolioData'));
+                localStorage.removeItem(getUserKey('assetSimulations'));
+                localStorage.removeItem(getUserKey('cagrTypes'));
+                localStorage.removeItem(getUserKey('selectedAssets'));
+                localStorage.removeItem(getUserKey('allAssetSimulations'));
+                localStorage.removeItem(getUserKey('googleSheetsId'));
                 setRealPortfolioData(null);
                 setAssetSimulations({});
                 setCagrTypes({});
+                setSelectedAssets({});
+                setAllAssetSimulations({});
+                setGoogleSheetsId('');
                 setSyncStatus('✅ Cache cleared');
               }}
               className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
@@ -904,11 +981,7 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
                           const newSelected = { ...selectedAssets };
                           newSelected[asset.symbol] = e.target.checked;
                           updateSelectedAssets(newSelected);
-                          
-                          // Update combined simulation with pre-calculated data
-                          setTimeout(() => {
-                            updateCombinedSimulation();
-                          }, 100);
+                          // useEffect will automatically update combined simulation
                         }}
                         className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                       />
