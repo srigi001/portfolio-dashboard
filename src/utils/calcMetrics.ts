@@ -88,13 +88,22 @@ export async function fetchMultipleAssetsData(symbols: string[]) {
 }
 
 /**
- * CAGR over N years.
+ * CAGR calculated from actual time span of price data.
+ * Always calculates the actual number of years from the data length
+ * (assuming 252 trading days per year), regardless of the years parameter.
+ * The years parameter is kept for backward compatibility but is ignored.
  */
-export function calculateCAGR(prices: number[], years: number): number {
+export function calculateCAGR(prices: number[], years?: number): number {
   if (prices.length < 2) return 0;
-  const start = prices[0],
-    end = prices[prices.length - 1];
-  return Math.pow(end / start, 1 / years) - 1;
+  const start = prices[0];
+  const end = prices[prices.length - 1];
+  
+  // Always calculate actual years from data length (252 trading days per year)
+  // This ensures accuracy even if the data doesn't span exactly the expected period
+  const actualYears = prices.length / 252;
+  
+  if (actualYears <= 0 || start <= 0) return 0;
+  return Math.pow(end / start, 1 / actualYears) - 1;
 }
 
 /**
