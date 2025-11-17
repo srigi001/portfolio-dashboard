@@ -182,8 +182,15 @@ export default function Sidebar({
         {showLogout && (
           <div className="px-4 py-3">
             <button
-              onClick={onLogout}
-              className="w-full flex items-center justify-center gap-2 hover:bg-gray-700 text-gray-200 py-2 rounded"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (onLogout) {
+                  onLogout();
+                }
+              }}
+              className="w-full flex items-center justify-center gap-2 hover:bg-gray-700 text-gray-200 py-2 rounded cursor-pointer transition-colors"
+              type="button"
             >
               Log Out
             </button>

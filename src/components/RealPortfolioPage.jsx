@@ -4,6 +4,7 @@ import ReactECharts from 'echarts-for-react';
 import dayjs from 'dayjs';
 import { fetchPortfolioData } from '../utils/googleSheets';
 import { fetchAssetData } from '../utils/calcMetrics';
+import { supabase } from '../utils/supabaseClient';
 
 // Inline component for one-time deposit input per asset
 function OneTimeDepositInput({ asset, oneTimeDeposit, onSet, onRemove }) {
@@ -266,13 +267,33 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     // Load cached monthly deposits from user-specific localStorage
     // Structure: { [symbol]: [{ id, date, amount }, ...] }
     const cached = localStorage.getItem(getUserKey('monthlyDeposits'));
-    return cached ? JSON.parse(cached) : {};
+    const parsed = cached ? JSON.parse(cached) : {};
+    console.log('📥 Loading monthly deposits from localStorage:', parsed);
+    // Filter out undefined/null values and ensure array format
+    const cleaned = {};
+    Object.keys(parsed).forEach(symbol => {
+      if (parsed[symbol] && Array.isArray(parsed[symbol]) && parsed[symbol].length > 0) {
+        cleaned[symbol] = parsed[symbol];
+      }
+    });
+    console.log('📥 Cleaned monthly deposits:', cleaned);
+    return cleaned;
   });
   const [oneTimeDeposits, setOneTimeDeposits] = useState(() => {
     // Load cached one-time deposits from user-specific localStorage
     // Structure: { [symbol]: { date, amount } } - single deposit per asset
     const cached = localStorage.getItem(getUserKey('oneTimeDeposits'));
-    return cached ? JSON.parse(cached) : {};
+    const parsed = cached ? JSON.parse(cached) : {};
+    console.log('📥 Loading one-time deposits from localStorage:', parsed);
+    // Filter out undefined/null values
+    const cleaned = {};
+    Object.keys(parsed).forEach(symbol => {
+      if (parsed[symbol] && parsed[symbol].date && parsed[symbol].amount) {
+        cleaned[symbol] = parsed[symbol];
+      }
+    });
+    console.log('📥 Cleaned one-time deposits:', cleaned);
+    return cleaned;
   });
   const [selectedAssets, setSelectedAssets] = useState(() => {
     // Load cached selected assets from user-specific localStorage
@@ -295,35 +316,104 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
   });
   const GOOGLE_SHEETS_RANGE = 'Universal!H:M';
 
+  // Load deposits from Supabase (defined early for use in useEffect)
+  const loadDepositsFromSupabase = async () => {
+    if (!user || !user.id || user.id === 'mock-user' || user.id === 'anonymous') {
+      return { monthlyDeposits: {}, oneTimeDeposits: {} };
+    }
+
+    try {
+      const { data: { user: currentUser } } = await supabase.auth.getUser();
+      if (currentUser?.user_metadata) {
+        const monthlyDeposits = currentUser.user_metadata.monthlyDeposits || {};
+        const oneTimeDeposits = currentUser.user_metadata.oneTimeDeposits || {};
+        console.log('📥 Loaded deposits from Supabase:', { monthlyDeposits, oneTimeDeposits });
+        return { monthlyDeposits, oneTimeDeposits };
+      }
+    } catch (err) {
+      console.error('❌ Exception loading deposits from Supabase:', err);
+    }
+
+    return { monthlyDeposits: {}, oneTimeDeposits: {} };
+  };
+
   // Reload all user-specific data when user changes
   useEffect(() => {
     if (!user) return;
 
-    // Reload all cached data for the current user
-    const cachedData = localStorage.getItem(getUserKey('realPortfolioData'));
-    const cachedSimulations = localStorage.getItem(getUserKey('assetSimulations'));
-    const cachedCagrTypes = localStorage.getItem(getUserKey('cagrTypes'));
-    const cachedSelectedAssets = localStorage.getItem(getUserKey('selectedAssets'));
-    const cachedAllSimulations = localStorage.getItem(getUserKey('allAssetSimulations'));
-    const cachedMonthlyDeposits = localStorage.getItem(getUserKey('monthlyDeposits'));
-    const cachedOneTimeDeposits = localStorage.getItem(getUserKey('oneTimeDeposits'));
-    const cachedSheetsId = localStorage.getItem(getUserKey('googleSheetsId'));
+    const loadUserData = async () => {
+      // Try to load deposits from Supabase first (for cross-domain sync), then fall back to localStorage
+      const supabaseDeposits = await loadDepositsFromSupabase();
+      
+      // Reload all cached data for the current user
+      const cachedData = localStorage.getItem(getUserKey('realPortfolioData'));
+      const cachedSimulations = localStorage.getItem(getUserKey('assetSimulations'));
+      const cachedCagrTypes = localStorage.getItem(getUserKey('cagrTypes'));
+      const cachedSelectedAssets = localStorage.getItem(getUserKey('selectedAssets'));
+      const cachedAllSimulations = localStorage.getItem(getUserKey('allAssetSimulations'));
+      const cachedMonthlyDeposits = localStorage.getItem(getUserKey('monthlyDeposits'));
+      const cachedOneTimeDeposits = localStorage.getItem(getUserKey('oneTimeDeposits'));
+      const cachedSheetsId = localStorage.getItem(getUserKey('googleSheetsId'));
 
-    if (cachedData) setRealPortfolioData(JSON.parse(cachedData));
-    if (cachedSimulations) setAssetSimulations(JSON.parse(cachedSimulations));
-    if (cachedCagrTypes) setCagrTypes(JSON.parse(cachedCagrTypes));
-    if (cachedAllSimulations) setAllAssetSimulations(JSON.parse(cachedAllSimulations));
-    if (cachedMonthlyDeposits) setMonthlyDeposits(JSON.parse(cachedMonthlyDeposits));
-    if (cachedOneTimeDeposits) setOneTimeDeposits(JSON.parse(cachedOneTimeDeposits));
-    if (cachedSelectedAssets) {
-      const selected = JSON.parse(cachedSelectedAssets);
-      setSelectedAssets(selected);
-    }
-    if (cachedAllSimulations) setAllAssetSimulations(JSON.parse(cachedAllSimulations));
-    if (cachedSheetsId) setGoogleSheetsId(cachedSheetsId);
+      if (cachedData) setRealPortfolioData(JSON.parse(cachedData));
+      if (cachedSimulations) setAssetSimulations(JSON.parse(cachedSimulations));
+      if (cachedCagrTypes) setCagrTypes(JSON.parse(cachedCagrTypes));
+      if (cachedAllSimulations) setAllAssetSimulations(JSON.parse(cachedAllSimulations));
+      
+      // Load deposits: prefer Supabase, then localStorage, then merge
+      let finalMonthlyDeposits = {};
+      let finalOneTimeDeposits = {};
+      
+      // Start with Supabase data if available
+      if (Object.keys(supabaseDeposits.monthlyDeposits).length > 0) {
+        finalMonthlyDeposits = supabaseDeposits.monthlyDeposits;
+        console.log('✅ Using monthly deposits from Supabase:', finalMonthlyDeposits);
+      } else if (cachedMonthlyDeposits) {
+        const parsed = JSON.parse(cachedMonthlyDeposits);
+        Object.keys(parsed).forEach(symbol => {
+          if (parsed[symbol] && Array.isArray(parsed[symbol]) && parsed[symbol].length > 0) {
+            finalMonthlyDeposits[symbol] = parsed[symbol];
+          }
+        });
+        console.log('✅ Using monthly deposits from localStorage:', finalMonthlyDeposits);
+      }
+      
+      if (Object.keys(supabaseDeposits.oneTimeDeposits).length > 0) {
+        finalOneTimeDeposits = supabaseDeposits.oneTimeDeposits;
+        console.log('✅ Using one-time deposits from Supabase:', finalOneTimeDeposits);
+      } else if (cachedOneTimeDeposits) {
+        const parsed = JSON.parse(cachedOneTimeDeposits);
+        Object.keys(parsed).forEach(symbol => {
+          if (parsed[symbol] && parsed[symbol].date && parsed[symbol].amount) {
+            finalOneTimeDeposits[symbol] = parsed[symbol];
+          }
+        });
+        console.log('✅ Using one-time deposits from localStorage:', finalOneTimeDeposits);
+      }
+      
+      // Update state and localStorage with loaded deposits
+      if (Object.keys(finalMonthlyDeposits).length > 0 || Object.keys(supabaseDeposits.monthlyDeposits).length === 0) {
+        setMonthlyDeposits(finalMonthlyDeposits);
+        saveToLocalStorage('monthlyDeposits', finalMonthlyDeposits);
+      }
+      
+      if (Object.keys(finalOneTimeDeposits).length > 0 || Object.keys(supabaseDeposits.oneTimeDeposits).length === 0) {
+        setOneTimeDeposits(finalOneTimeDeposits);
+        saveToLocalStorage('oneTimeDeposits', finalOneTimeDeposits);
+      }
+      
+      if (cachedSelectedAssets) {
+        const selected = JSON.parse(cachedSelectedAssets);
+        setSelectedAssets(selected);
+      }
+      if (cachedAllSimulations) setAllAssetSimulations(JSON.parse(cachedAllSimulations));
+      if (cachedSheetsId) setGoogleSheetsId(cachedSheetsId);
 
-    console.log('✅ Loaded user-specific cache for:', user.email || user.id);
-    // useEffect watching selectedAssets and allAssetSimulations will automatically rebuild combined simulation
+      console.log('✅ Loaded user-specific cache for:', user.email || user.id);
+      // useEffect watching selectedAssets and allAssetSimulations will automatically rebuild combined simulation
+    };
+
+    loadUserData();
   }, [user?.id]);
 
   // Persistence functions - now user-specific
@@ -360,14 +450,60 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     saveToLocalStorage('allAssetSimulations', simulations);
   };
 
-  const updateMonthlyDeposits = (deposits) => {
-    setMonthlyDeposits(deposits);
-    saveToLocalStorage('monthlyDeposits', deposits);
+  // Save deposits to Supabase for cross-domain sync
+  const saveDepositsToSupabase = async (monthlyDeposits, oneTimeDeposits) => {
+    if (!user || !user.id || user.id === 'mock-user' || user.id === 'anonymous') {
+      console.log('⚠️ Cannot save to Supabase: no valid user');
+      return;
+    }
+
+    try {
+      // Update user metadata with deposits
+      const { error } = await supabase.auth.updateUser({
+        data: {
+          monthlyDeposits: monthlyDeposits,
+          oneTimeDeposits: oneTimeDeposits
+        }
+      });
+
+      if (error) {
+        console.error('❌ Failed to save deposits to Supabase:', error);
+      } else {
+        console.log('✅ Saved deposits to Supabase');
+      }
+    } catch (err) {
+      console.error('❌ Exception saving deposits to Supabase:', err);
+    }
   };
 
-  const updateOneTimeDeposits = (deposits) => {
-    setOneTimeDeposits(deposits);
-    saveToLocalStorage('oneTimeDeposits', deposits);
+  const updateMonthlyDeposits = async (deposits) => {
+    // Clean the deposits object before saving (remove undefined/null entries)
+    const cleaned = {};
+    Object.keys(deposits).forEach(symbol => {
+      if (deposits[symbol] && Array.isArray(deposits[symbol]) && deposits[symbol].length > 0) {
+        cleaned[symbol] = deposits[symbol];
+      }
+    });
+    console.log('💾 Saving monthly deposits:', cleaned);
+    setMonthlyDeposits(cleaned);
+    saveToLocalStorage('monthlyDeposits', cleaned);
+    // Also save to Supabase for cross-domain sync
+    await saveDepositsToSupabase(cleaned, oneTimeDeposits);
+  };
+
+  const updateOneTimeDeposits = async (deposits) => {
+    // Clean the deposits object before saving (remove undefined/null entries)
+    const cleaned = {};
+    Object.keys(deposits).forEach(symbol => {
+      if (deposits[symbol] && deposits[symbol].date && deposits[symbol].amount) {
+        cleaned[symbol] = deposits[symbol];
+      }
+    });
+    console.log('💾 Saving one-time deposits:', cleaned);
+    setOneTimeDeposits(cleaned);
+    saveToLocalStorage('oneTimeDeposits', cleaned);
+    // Also save to Supabase for cross-domain sync
+    await saveDepositsToSupabase(monthlyDeposits, cleaned);
   };
 
   const saveGoogleSheetsId = (id) => {
@@ -1584,6 +1720,7 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
 
                 {/* Monthly Deposits Section */}
                 <MonthlyDepositInput 
+                  key={`monthly-${asset.symbol}-${(monthlyDeposits[asset.symbol] || []).length}`}
                   asset={asset}
                   monthlyDeposits={monthlyDeposits[asset.symbol] || []}
                   onAdd={(deposit) => {
@@ -1601,10 +1738,14 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
                   onRemove={(depositId) => {
                     const currentDeposits = monthlyDeposits[asset.symbol] || [];
                     const updatedDeposits = currentDeposits.filter(d => d.id !== depositId);
-                    updateMonthlyDeposits({
-                      ...monthlyDeposits,
-                      [asset.symbol]: updatedDeposits.length > 0 ? updatedDeposits : undefined
-                    });
+                    const updated = { ...monthlyDeposits };
+                    if (updatedDeposits.length > 0) {
+                      updated[asset.symbol] = updatedDeposits;
+                    } else {
+                      // Explicitly delete the key instead of setting to undefined
+                      delete updated[asset.symbol];
+                    }
+                    updateMonthlyDeposits(updated);
                     // Trigger re-simulation with updated deposits
                     const currentCagrType = cagrTypes[asset.symbol] || '5Y';
                     const currentOneTimeDeposit = oneTimeDeposits[asset.symbol] || null;

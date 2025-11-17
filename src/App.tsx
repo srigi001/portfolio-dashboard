@@ -414,7 +414,24 @@ export default function App() {
           onDeletePortfolio={handleDeletePortfolio}
           onDuplicatePortfolio={handleDuplicatePortfolio}
           onReorder={handleReorder}
-          onLogout={() => supabase.auth.signOut()}
+          onLogout={async () => {
+            try {
+              console.log('🚪 Logging out...');
+              const { error } = await supabase.auth.signOut();
+              if (error) {
+                console.error('❌ Logout error:', error);
+                alert('Failed to log out: ' + error.message);
+              } else {
+                console.log('✅ Logged out successfully');
+                // Force page reload to clear all state
+                window.location.href = '/';
+              }
+            } catch (err) {
+              console.error('❌ Logout exception:', err);
+              const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
+              alert('Failed to log out: ' + errorMessage);
+            }
+          }}
           showLogout={USE_GOOGLE_AUTH && user}
           user={user}
         />
