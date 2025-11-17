@@ -5,6 +5,237 @@ import dayjs from 'dayjs';
 import { fetchPortfolioData } from '../utils/googleSheets';
 import { fetchAssetData } from '../utils/calcMetrics';
 
+// Inline component for one-time deposit input per asset
+function OneTimeDepositInput({ asset, oneTimeDeposit, onSet, onRemove }) {
+  // Initialize state from prop, converting number to string for input field
+  const [amount, setAmount] = useState(() => {
+    if (oneTimeDeposit?.amount) {
+      return typeof oneTimeDeposit.amount === 'number' ? oneTimeDeposit.amount.toString() : oneTimeDeposit.amount;
+    }
+    return '';
+  });
+  const [date, setDate] = useState(oneTimeDeposit?.date || '');
+
+  // Update local state when prop changes (e.g., when deposit is cleared or updated)
+  useEffect(() => {
+    if (!oneTimeDeposit) {
+      setAmount('');
+      setDate('');
+    } else {
+      // Convert number to string for input field
+      const amountStr = typeof oneTimeDeposit.amount === 'number' 
+        ? oneTimeDeposit.amount.toString() 
+        : (oneTimeDeposit.amount || '');
+      setAmount(amountStr);
+      setDate(oneTimeDeposit.date || '');
+    }
+  }, [oneTimeDeposit]);
+
+  const handleSet = () => {
+    if (!amount || !date || parseFloat(amount) <= 0) {
+      console.warn('One-time deposit validation failed:', { amount, date });
+      return;
+    }
+    onSet({
+      date: date,
+      amount: parseFloat(amount)
+    });
+  };
+
+  const handleRemove = () => {
+    onRemove();
+    setAmount('');
+    setDate('');
+  };
+
+  const handleKeyPress = (e) => {
+    if (e.key === 'Enter') {
+      handleSet();
+    }
+  };
+
+  return (
+    <div className="p-4 border-b border-gray-200">
+      <h4 className="text-sm font-medium text-gray-700 mb-3">One-Time Deposit (Optional)</h4>
+      
+      {/* Add/Edit One-Time Deposit Form */}
+      <div className="mb-4 flex items-end gap-3">
+        <div className="flex-1">
+          <label className="block text-xs text-gray-500 mb-1">Amount ($)</label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            placeholder="Enter deposit amount"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            onKeyPress={handleKeyPress}
+            className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+        <div className="flex-1">
+          <label className="block text-xs text-gray-500 mb-1">Deposit Date</label>
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            onKeyPress={handleKeyPress}
+            className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+        {oneTimeDeposit ? (
+          <>
+            <button
+              onClick={handleSet}
+              className="px-4 py-2 bg-green-600 text-white text-sm rounded hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={!amount || !date || parseFloat(amount) <= 0}
+              title={!amount || !date || parseFloat(amount) <= 0 ? `Cannot update: amount=${amount}, date=${date}` : 'Update deposit'}
+            >
+              Update
+            </button>
+            <button
+              onClick={handleRemove}
+              className="px-4 py-2 bg-red-600 text-white text-sm rounded hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500"
+              title="Remove this deposit"
+            >
+              Remove
+            </button>
+          </>
+        ) : (
+          <button
+            onClick={handleSet}
+            className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={!amount || !date || parseFloat(amount) <= 0}
+          >
+            Add
+          </button>
+        )}
+      </div>
+
+      {/* Display existing one-time deposit */}
+      {oneTimeDeposit && (
+        <div className="mt-2 p-3 bg-green-50 border border-green-200 rounded">
+          <div className="text-xs text-green-700">
+            <div className="font-medium">Current One-Time Deposit:</div>
+            <div className="mt-1">
+              ${oneTimeDeposit.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} on {oneTimeDeposit.date}
+            </div>
+            <div className="mt-1 text-gray-600 italic">
+              (Will be applied on the 1st of the deposit month)
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {!oneTimeDeposit && (
+        <p className="text-xs text-gray-500 italic">No one-time deposit configured. Add one above to include an additional lump sum deposit in the simulation. Note: Deposit dates are normalized to the 1st of the selected month.</p>
+      )}
+    </div>
+  );
+}
+
+// Inline component for monthly deposit input per asset
+function MonthlyDepositInput({ asset, monthlyDeposits, onAdd, onRemove }) {
+  const [amount, setAmount] = useState('');
+  const [date, setDate] = useState('');
+
+  const handleAdd = () => {
+    if (!amount || !date || parseFloat(amount) <= 0) return;
+    onAdd({
+      id: Date.now().toString(),
+      date: date,
+      amount: parseFloat(amount)
+    });
+    setAmount('');
+    setDate('');
+  };
+
+  const handleKeyPress = (e) => {
+    if (e.key === 'Enter') {
+      handleAdd();
+    }
+  };
+
+  return (
+    <div className="p-4 border-b border-gray-200">
+      <h4 className="text-sm font-medium text-gray-700 mb-3">Monthly Deposits (Optional)</h4>
+      
+      {/* Add Monthly Deposit Form */}
+      <div className="mb-4 flex items-end gap-3">
+        <div className="flex-1">
+          <label className="block text-xs text-gray-500 mb-1">Amount ($)</label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            placeholder="Enter monthly amount"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            onKeyPress={handleKeyPress}
+            className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+        <div className="flex-1">
+          <label className="block text-xs text-gray-500 mb-1">Start Date</label>
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            onKeyPress={handleKeyPress}
+            className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+        <button
+          onClick={handleAdd}
+          className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+          disabled={!amount || !date || parseFloat(amount) <= 0}
+        >
+          Add
+        </button>
+      </div>
+
+      {/* Existing Monthly Deposits List */}
+      {monthlyDeposits && monthlyDeposits.length > 0 && (
+        <div className="mt-4">
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Start Date</th>
+                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Monthly Amount ($)</th>
+                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {monthlyDeposits.map((deposit) => (
+                  <tr key={deposit.id}>
+                    <td className="px-3 py-2 text-sm text-gray-900">{deposit.date}</td>
+                    <td className="px-3 py-2 text-sm text-gray-900">
+                      ${deposit.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                    <td className="px-3 py-2 text-sm">
+                      <button
+                        onClick={() => onRemove(deposit.id)}
+                        className="text-red-600 hover:text-red-800 text-xs font-medium"
+                      >
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      
+      {(!monthlyDeposits || monthlyDeposits.length === 0) && (
+        <p className="text-xs text-gray-500 italic">No monthly deposits configured. Add one above to include recurring deposits in the simulation.</p>
+      )}
+    </div>
+  );
+}
+
 export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) {
   // Helper function to generate user-specific localStorage keys
   const getUserKey = (key) => {
@@ -25,9 +256,22 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     return cached ? JSON.parse(cached) : {};
   });
   const [simulatingAssets, setSimulatingAssets] = useState(new Set());
+  const [reSimulatingAssets, setReSimulatingAssets] = useState(new Set()); // Track assets being re-simulated after CAGR type change
   const [cagrTypes, setCagrTypes] = useState(() => {
     // Load cached CAGR types from user-specific localStorage
     const cached = localStorage.getItem(getUserKey('cagrTypes'));
+    return cached ? JSON.parse(cached) : {};
+  });
+  const [monthlyDeposits, setMonthlyDeposits] = useState(() => {
+    // Load cached monthly deposits from user-specific localStorage
+    // Structure: { [symbol]: [{ id, date, amount }, ...] }
+    const cached = localStorage.getItem(getUserKey('monthlyDeposits'));
+    return cached ? JSON.parse(cached) : {};
+  });
+  const [oneTimeDeposits, setOneTimeDeposits] = useState(() => {
+    // Load cached one-time deposits from user-specific localStorage
+    // Structure: { [symbol]: { date, amount } } - single deposit per asset
+    const cached = localStorage.getItem(getUserKey('oneTimeDeposits'));
     return cached ? JSON.parse(cached) : {};
   });
   const [selectedAssets, setSelectedAssets] = useState(() => {
@@ -61,12 +305,16 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     const cachedCagrTypes = localStorage.getItem(getUserKey('cagrTypes'));
     const cachedSelectedAssets = localStorage.getItem(getUserKey('selectedAssets'));
     const cachedAllSimulations = localStorage.getItem(getUserKey('allAssetSimulations'));
+    const cachedMonthlyDeposits = localStorage.getItem(getUserKey('monthlyDeposits'));
+    const cachedOneTimeDeposits = localStorage.getItem(getUserKey('oneTimeDeposits'));
     const cachedSheetsId = localStorage.getItem(getUserKey('googleSheetsId'));
 
     if (cachedData) setRealPortfolioData(JSON.parse(cachedData));
     if (cachedSimulations) setAssetSimulations(JSON.parse(cachedSimulations));
     if (cachedCagrTypes) setCagrTypes(JSON.parse(cachedCagrTypes));
     if (cachedAllSimulations) setAllAssetSimulations(JSON.parse(cachedAllSimulations));
+    if (cachedMonthlyDeposits) setMonthlyDeposits(JSON.parse(cachedMonthlyDeposits));
+    if (cachedOneTimeDeposits) setOneTimeDeposits(JSON.parse(cachedOneTimeDeposits));
     if (cachedSelectedAssets) {
       const selected = JSON.parse(cachedSelectedAssets);
       setSelectedAssets(selected);
@@ -110,6 +358,16 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
   const updateAllAssetSimulations = (simulations) => {
     setAllAssetSimulations(simulations);
     saveToLocalStorage('allAssetSimulations', simulations);
+  };
+
+  const updateMonthlyDeposits = (deposits) => {
+    setMonthlyDeposits(deposits);
+    saveToLocalStorage('monthlyDeposits', deposits);
+  };
+
+  const updateOneTimeDeposits = (deposits) => {
+    setOneTimeDeposits(deposits);
+    saveToLocalStorage('oneTimeDeposits', deposits);
   };
 
   const saveGoogleSheetsId = (id) => {
@@ -207,7 +465,17 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
         lastSync: new Date().toISOString()
       });
 
-      // Auto-simulate all assets
+      // Clear combined simulation before re-simulating (in case old simulations exist)
+      setCombinedSimulation(null);
+
+      // Auto-simulate all assets (will use current oneTimeDeposits and monthlyDeposits state)
+      // Note: If deposits were cleared, state should be empty and simulations will not include them
+      console.log('📊 About to simulate assets. Current deposits state:', {
+        oneTimeDeposits: oneTimeDeposits,
+        monthlyDeposits: monthlyDeposits,
+        hasOneTimeDeposits: Object.keys(oneTimeDeposits).length > 0,
+        hasMonthlyDeposits: Object.keys(monthlyDeposits).length > 0
+      });
       await simulateAllAssets(assetsWithValues);
 
       setSyncStatus('✅ Sync completed successfully!');
@@ -221,6 +489,10 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
 
   const simulateAllAssets = async (assets) => {
     console.log('🚀 Auto-simulating all assets...');
+    console.log('🔍 Current deposits state:', {
+      oneTimeDeposits: Object.keys(oneTimeDeposits).length > 0 ? oneTimeDeposits : 'empty',
+      monthlyDeposits: Object.keys(monthlyDeposits).length > 0 ? monthlyDeposits : 'empty'
+    });
     setIsSimulatingAll(true);
     
     const allSimulations = {};
@@ -244,17 +516,55 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
             volatility = asset.volatility5Y || 0.15;
         }
         
+        // Get monthly deposits for this asset (convert from {id, date, amount} to {date, amount} for backend)
+        const assetMonthlyDeposits = (monthlyDeposits[asset.symbol] || []).map(d => ({
+          date: d.date,
+          amount: d.amount
+        }));
+
+        // Build one-time deposits array: always include initial deposit, plus optional user deposit
+        const oneTimeDepositsArray = [{
+          date: '2025-01-01',
+          amount: asset.currentValue
+        }];
+        
+        // Add optional user-defined one-time deposit if it exists
+        // IMPORTANT: Only use deposits if they exist in current state (not from old cached simulations)
+        const userOneTimeDeposit = oneTimeDeposits[asset.symbol];
+        if (userOneTimeDeposit && userOneTimeDeposit.date && userOneTimeDeposit.amount > 0) {
+          // Normalize date to first of month (backend only checks dates on month boundaries)
+          // Parse YYYY-MM-DD and convert to YYYY-MM-01
+          const dateParts = userOneTimeDeposit.date.split('-');
+          if (dateParts.length === 3) {
+            const normalizedDate = `${dateParts[0]}-${dateParts[1]}-01`;
+            
+            oneTimeDepositsArray.push({
+              date: normalizedDate,
+              amount: userOneTimeDeposit.amount
+            });
+            console.log(`💰 Adding user one-time deposit for ${asset.symbol}:`, {
+              originalDate: userOneTimeDeposit.date,
+              normalizedDate: normalizedDate,
+              amount: userOneTimeDeposit.amount
+            });
+          } else {
+            console.warn(`⚠️ Invalid date format for one-time deposit: ${userOneTimeDeposit.date}`);
+          }
+        } else {
+          // Log when no user deposit is found (for debugging)
+          if (Object.keys(oneTimeDeposits).length > 0) {
+            console.log(`ℹ️ No user one-time deposit for ${asset.symbol} (deposits exist for other assets: ${Object.keys(oneTimeDeposits).join(', ')})`);
+          }
+        }
+
         const payload = {
           allocations: [{
             allocation: 100,
             cagr: cagr,
             volatility: volatility,
           }],
-          oneTimeDeposits: [{
-            date: '2025-01-01',
-            amount: asset.currentValue
-          }],
-          monthlyChanges: [],
+          oneTimeDeposits: oneTimeDepositsArray,
+          monthlyChanges: assetMonthlyDeposits,
           years: 10
         };
         
@@ -366,6 +676,147 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     // The useEffect will automatically trigger when state changes
   };
 
+  // Re-simulate a single asset when CAGR type, monthly deposits, or one-time deposit changes
+  const reSimulateAsset = async (asset, newCagrType, currentMonthlyDeposits = null, currentOneTimeDeposit = null) => {
+    if (reSimulatingAssets.has(asset.symbol)) return;
+    
+    setReSimulatingAssets(prev => new Set(prev).add(asset.symbol));
+    
+    try {
+      console.log(`🔄 Re-simulating ${asset.symbol} with new CAGR type: ${newCagrType}...`);
+      
+      // Use the new CAGR type passed as parameter (state update is async)
+      const cagrType = newCagrType || cagrTypes[asset.symbol] || '5Y';
+      
+      // Select CAGR and volatility based on type
+      let cagr, volatility;
+      switch (cagrType) {
+        case '10Y':
+          cagr = asset.cagr10Y || 0.08;
+          volatility = asset.volatility10Y || 0.15;
+          break;
+        case 'Blended':
+          cagr = asset.cagrBlended || 0.08;
+          volatility = asset.volatilityBlended || 0.15;
+          break;
+        default: // '5Y'
+          cagr = asset.cagr5Y || 0.08;
+          volatility = asset.volatility5Y || 0.15;
+      }
+      
+      // Get monthly deposits - use passed value if provided, otherwise use current state
+      const depositsToUse = currentMonthlyDeposits !== null 
+        ? currentMonthlyDeposits 
+        : (monthlyDeposits[asset.symbol] || []);
+      
+      // Convert from {id, date, amount} to {date, amount} for backend
+      const assetMonthlyDeposits = depositsToUse.map(d => ({
+        date: d.date,
+        amount: d.amount
+      }));
+
+      // Get one-time deposit - use passed value if provided, otherwise use current state
+      const oneTimeDepositToUse = currentOneTimeDeposit !== null
+        ? currentOneTimeDeposit
+        : (oneTimeDeposits[asset.symbol] || null);
+
+      // Build one-time deposits array: always include initial deposit, plus optional user deposit
+      const oneTimeDepositsArray = [{
+        date: '2025-01-01',
+        amount: asset.currentValue
+      }];
+      
+      // Add optional user-defined one-time deposit if it exists
+      if (oneTimeDepositToUse && oneTimeDepositToUse.date && oneTimeDepositToUse.amount > 0) {
+        // Normalize date to first of month (backend only checks dates on month boundaries)
+        // Parse YYYY-MM-DD and convert to YYYY-MM-01
+        const dateParts = oneTimeDepositToUse.date.split('-');
+        if (dateParts.length === 3) {
+          const normalizedDate = `${dateParts[0]}-${dateParts[1]}-01`;
+          
+          oneTimeDepositsArray.push({
+            date: normalizedDate,
+            amount: oneTimeDepositToUse.amount
+          });
+        } else {
+          console.warn(`⚠️ Invalid date format for one-time deposit: ${oneTimeDepositToUse.date}`);
+        }
+      }
+
+      const payload = {
+        allocations: [{
+          allocation: 100,
+          cagr: cagr,
+          volatility: volatility,
+        }],
+        oneTimeDeposits: oneTimeDepositsArray,
+        monthlyChanges: assetMonthlyDeposits,
+        years: 10
+      };
+
+      console.log(`📊 Re-simulation payload for ${asset.symbol} (${cagrType}):`, payload);
+      console.log(`💰 One-time deposits breakdown:`, {
+        initialDeposit: { date: '2025-01-01', amount: asset.currentValue },
+        userDeposit: oneTimeDepositToUse,
+        normalizedUserDeposit: oneTimeDepositToUse && oneTimeDepositToUse.date && oneTimeDepositToUse.amount > 0 ? {
+          originalDate: oneTimeDepositToUse.date,
+          normalizedDate: oneTimeDepositsArray.find(d => d.date !== '2025-01-01')?.date,
+          amount: oneTimeDepositToUse.amount
+        } : null,
+        totalDeposits: oneTimeDepositsArray.length,
+        allDeposits: oneTimeDepositsArray,
+        totalAmount: oneTimeDepositsArray.reduce((sum, d) => sum + d.amount, 0)
+      });
+
+      const res = await fetch(
+        'https://investment-dashboard-backend-gm79.onrender.com/api/simulate',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }
+      );
+      
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Simulation failed');
+      }
+      
+      const result = await res.json();
+      console.log(`✅ Re-simulation completed for ${asset.symbol}:`, result);
+      
+      // Update allAssetSimulations so the combined simulation reflects the change
+      // Use functional update to ensure we have the latest state
+      setAllAssetSimulations(prev => {
+        const updated = {
+          ...prev,
+          [asset.symbol]: result
+        };
+        saveToLocalStorage('allAssetSimulations', updated);
+        return updated;
+      });
+      
+      // Also update assetSimulations for consistency
+      setAssetSimulations(prev => {
+        const updated = {
+          ...prev,
+          [asset.symbol]: result
+        };
+        saveToLocalStorage('assetSimulations', updated);
+        return updated;
+      });
+      
+    } catch (error) {
+      console.error(`❌ Re-simulation error for ${asset.symbol}:`, error);
+    } finally {
+      setReSimulatingAssets(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(asset.symbol);
+        return newSet;
+      });
+    }
+  };
+
   const runAssetSimulation = async (asset) => {
     if (simulatingAssets.has(asset.symbol)) return;
     
@@ -393,17 +844,44 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           volatility = asset.volatility5Y || 0.15;
       }
       
+      // Get monthly deposits for this asset (convert from {id, date, amount} to {date, amount} for backend)
+      const assetMonthlyDeposits = (monthlyDeposits[asset.symbol] || []).map(d => ({
+        date: d.date,
+        amount: d.amount
+      }));
+
+      // Build one-time deposits array: always include initial deposit, plus optional user deposit
+      const oneTimeDepositsArray = [{
+        date: '2025-01-01',
+        amount: asset.currentValue // Use current value as initial deposit
+      }];
+      
+      // Add optional user-defined one-time deposit if it exists
+      const userOneTimeDeposit = oneTimeDeposits[asset.symbol];
+      if (userOneTimeDeposit && userOneTimeDeposit.date && userOneTimeDeposit.amount > 0) {
+        // Normalize date to first of month (backend only checks dates on month boundaries)
+        // Parse YYYY-MM-DD and convert to YYYY-MM-01
+        const dateParts = userOneTimeDeposit.date.split('-');
+        if (dateParts.length === 3) {
+          const normalizedDate = `${dateParts[0]}-${dateParts[1]}-01`;
+          
+          oneTimeDepositsArray.push({
+            date: normalizedDate,
+            amount: userOneTimeDeposit.amount
+          });
+        } else {
+          console.warn(`⚠️ Invalid date format for one-time deposit: ${userOneTimeDeposit.date}`);
+        }
+      }
+
       const payload = {
         allocations: [{
           allocation: 100, // 100% allocation for single asset
           cagr: cagr,
           volatility: volatility,
         }],
-        oneTimeDeposits: [{
-          date: '2025-01-01',
-          amount: asset.currentValue // Use current value as initial deposit
-        }],
-        monthlyChanges: [], // No monthly deposits for individual asset
+        oneTimeDeposits: oneTimeDepositsArray,
+        monthlyChanges: assetMonthlyDeposits,
         years: 10 // 10-year projection
       };
 
@@ -673,43 +1151,6 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     };
   };
 
-  const forceUpdatePortfolio = async () => {
-    if (!realPortfolioData) {
-      setSyncStatus('❌ No portfolio data available. Please sync first.');
-      return;
-    }
-
-    setIsSyncing(true);
-    setSyncStatus('🔄 Updating portfolio with latest data...');
-    
-    try {
-      // Update the portfolio with real data
-      const updatedPortfolio = {
-        ...portfolio,
-        allocations: realPortfolioData.assets.map(asset => ({
-          symbol: asset.symbol,
-          allocation: asset.allocation,
-          cagr5Y: asset.cagr5Y || 0.08,
-          cagr10Y: asset.cagr10Y || 0.08,
-          cagrBlended: asset.cagrBlended || 0.08,
-          volatility5Y: asset.volatility5Y || 0.15,
-          volatility10Y: asset.volatility10Y || 0.15,
-          volatilityBlended: asset.volatilityBlended || 0.15,
-          cagrType: '5Y'
-        })),
-        realPortfolioData: realPortfolioData
-      };
-
-      updatePortfolio(updatedPortfolio);
-      setSyncStatus('✅ Portfolio updated successfully!');
-    } catch (error) {
-      console.error('❌ Update failed:', error);
-      setSyncStatus('❌ Update failed: ' + error.message);
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
   const getLoadingChartOption = () => {
     return {
       title: {
@@ -866,7 +1307,7 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
       <div className="bg-white rounded-lg shadow-md p-6 mb-6">
         <h2 className="text-lg font-semibold mb-4">Google Sheets Sync</h2>
         <p className="text-sm text-gray-600 mb-4">
-          💾 All data is automatically saved to your profile and will persist across sessions. When you return, simply click "Update Portfolio" to refresh with the latest data.
+          💾 All data is automatically saved to your profile and will persist across sessions. When you return, simply click "Sync from Google Sheets" to refresh with the latest data.
         </p>
         
         <div className="space-y-4">
@@ -899,30 +1340,37 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
             >
               {isSyncing ? '🔄 Syncing...' : '🔄 Sync from Google Sheets'}
             </button>
-            
-            <button
-              onClick={forceUpdatePortfolio}
-              disabled={isSyncing || !realPortfolioData}
-              className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
-            >
-              📊 Update Portfolio
-            </button>
 
             <button
               onClick={() => {
+                // Clear all localStorage items
                 localStorage.removeItem(getUserKey('realPortfolioData'));
                 localStorage.removeItem(getUserKey('assetSimulations'));
                 localStorage.removeItem(getUserKey('cagrTypes'));
                 localStorage.removeItem(getUserKey('selectedAssets'));
                 localStorage.removeItem(getUserKey('allAssetSimulations'));
+                localStorage.removeItem(getUserKey('monthlyDeposits'));
+                localStorage.removeItem(getUserKey('oneTimeDeposits'));
                 localStorage.removeItem(getUserKey('googleSheetsId'));
+                
+                // Clear all state
                 setRealPortfolioData(null);
                 setAssetSimulations({});
                 setCagrTypes({});
                 setSelectedAssets({});
                 setAllAssetSimulations({});
+                setMonthlyDeposits({});
+                setOneTimeDeposits({});
                 setGoogleSheetsId('');
-                setSyncStatus('✅ Cache cleared');
+                setCombinedSimulation(null);
+                
+                // Verify cleanup
+                console.log('🗑️ Cache cleared. Verifying one-time deposits:', {
+                  localStorage: localStorage.getItem(getUserKey('oneTimeDeposits')),
+                  stateWillBe: {}
+                });
+                
+                setSyncStatus('✅ Cache cleared - All deposits and simulations removed');
               }}
               className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
             >
@@ -985,8 +1433,17 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
                         }}
                         className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                       />
-                      <span className="text-sm text-gray-700">
-                        {asset.symbol} (${asset.currentValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} - {cagrTypes[asset.symbol] || '5Y'})
+                      <span className="text-sm text-gray-700 flex items-center space-x-2">
+                        <span>{asset.symbol} (${asset.currentValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} - {cagrTypes[asset.symbol] || '5Y'})</span>
+                        {reSimulatingAssets.has(asset.symbol) && (
+                          <span className="text-xs text-blue-600 flex items-center">
+                            <svg className="animate-spin h-3 w-3 mr-1" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Simulating...
+                          </span>
+                        )}
                       </span>
                     </label>
                   ))}
@@ -1056,16 +1513,33 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
                     </div>
                     <div className="flex items-center space-x-4">
                       <div>
-                        <div className="text-sm text-gray-500">CAGR Type</div>
+                        <div className="text-sm text-gray-500 flex items-center space-x-2">
+                          <span>CAGR Type</span>
+                          {reSimulatingAssets.has(asset.symbol) && (
+                            <span className="text-xs text-blue-600 flex items-center">
+                              <svg className="animate-spin h-3 w-3 mr-1" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                              </svg>
+                              Simulating...
+                            </span>
+                          )}
+                        </div>
                         <select
                           value={cagrTypes[asset.symbol] || '5Y'}
                           onChange={(e) => {
+                            const newCagrType = e.target.value;
                             updateCagrTypes({
                               ...cagrTypes,
-                              [asset.symbol]: e.target.value
+                              [asset.symbol]: newCagrType
                             });
+                            // Trigger re-simulation with new CAGR type
+                            const currentMonthlyDeposits = monthlyDeposits[asset.symbol] || [];
+                            const currentOneTimeDeposit = oneTimeDeposits[asset.symbol] || null;
+                            reSimulateAsset(asset, newCagrType, currentMonthlyDeposits, currentOneTimeDeposit);
                           }}
-                          className="text-sm border border-gray-300 rounded px-2 py-1"
+                          disabled={reSimulatingAssets.has(asset.symbol)}
+                          className="text-sm border border-gray-300 rounded px-2 py-1 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           <option value="5Y">5Y ({((asset.cagr5Y || 0) * 100).toFixed(2)}%)</option>
                           <option value="10Y">10Y ({((asset.cagr10Y || 0) * 100).toFixed(2)}%)</option>
@@ -1081,6 +1555,62 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
                     </div>
                   </div>
                 </div>
+
+                {/* One-Time Deposit Section */}
+                <OneTimeDepositInput
+                  key={`one-time-${asset.symbol}-${oneTimeDeposits[asset.symbol]?.date || 'none'}`}
+                  asset={asset}
+                  oneTimeDeposit={oneTimeDeposits[asset.symbol] || null}
+                  onSet={(deposit) => {
+                    updateOneTimeDeposits({
+                      ...oneTimeDeposits,
+                      [asset.symbol]: deposit
+                    });
+                    // Trigger re-simulation with updated deposit
+                    const currentCagrType = cagrTypes[asset.symbol] || '5Y';
+                    const currentMonthlyDeposits = monthlyDeposits[asset.symbol] || [];
+                    reSimulateAsset(asset, currentCagrType, currentMonthlyDeposits, deposit);
+                  }}
+                  onRemove={() => {
+                    const updated = { ...oneTimeDeposits };
+                    delete updated[asset.symbol];
+                    updateOneTimeDeposits(updated);
+                    // Trigger re-simulation without the deposit
+                    const currentCagrType = cagrTypes[asset.symbol] || '5Y';
+                    const currentMonthlyDeposits = monthlyDeposits[asset.symbol] || [];
+                    reSimulateAsset(asset, currentCagrType, currentMonthlyDeposits, null);
+                  }}
+                />
+
+                {/* Monthly Deposits Section */}
+                <MonthlyDepositInput 
+                  asset={asset}
+                  monthlyDeposits={monthlyDeposits[asset.symbol] || []}
+                  onAdd={(deposit) => {
+                    const currentDeposits = monthlyDeposits[asset.symbol] || [];
+                    const updatedDeposits = [...currentDeposits, deposit];
+                    updateMonthlyDeposits({
+                      ...monthlyDeposits,
+                      [asset.symbol]: updatedDeposits
+                    });
+                    // Trigger re-simulation with updated deposits
+                    const currentCagrType = cagrTypes[asset.symbol] || '5Y';
+                    const currentOneTimeDeposit = oneTimeDeposits[asset.symbol] || null;
+                    reSimulateAsset(asset, currentCagrType, updatedDeposits, currentOneTimeDeposit);
+                  }}
+                  onRemove={(depositId) => {
+                    const currentDeposits = monthlyDeposits[asset.symbol] || [];
+                    const updatedDeposits = currentDeposits.filter(d => d.id !== depositId);
+                    updateMonthlyDeposits({
+                      ...monthlyDeposits,
+                      [asset.symbol]: updatedDeposits.length > 0 ? updatedDeposits : undefined
+                    });
+                    // Trigger re-simulation with updated deposits
+                    const currentCagrType = cagrTypes[asset.symbol] || '5Y';
+                    const currentOneTimeDeposit = oneTimeDeposits[asset.symbol] || null;
+                    reSimulateAsset(asset, currentCagrType, updatedDeposits.length > 0 ? updatedDeposits : [], currentOneTimeDeposit);
+                  }}
+                />
 
                 {/* Purchase History Table */}
                 <div className="p-4">
