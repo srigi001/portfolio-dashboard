@@ -1712,6 +1712,8 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
             lineStyle: { color: '#9ca3af', width: 1, type: 'dashed' },
             data: [{ xAxis: finalProjectionStartIndex >= 0 ? finalProjectionStartIndex : allDates.length - 1 }],
             label: { show: false },
+            symbol: ['none', 'none'], // Remove arrow symbols at both ends
+            symbolSize: 0, // Ensure no symbols are shown
           },
         },
         {
