@@ -4,6 +4,7 @@ const BACKEND_BASE = 'https://yfinance-backend.onrender.com';
 
 /**
  * Fetch the full 10 Y daily price history once.
+ * Returns array of prices (numbers only) for backward compatibility.
  */
 export async function fetch10YPriceHistory(symbol: string): Promise<number[]> {
   const timestamp = Date.now() + Math.random(); // More aggressive cache busting
@@ -63,6 +64,83 @@ export async function fetch10YPriceHistory(symbol: string): Promise<number[]> {
         await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
       } else {
         console.error(`❌ Failed to fetch ${symbol} after 3 attempts:`, error);
+        throw error;
+      }
+    }
+  }
+  
+  throw new Error(`Failed to fetch data for ${symbol}`);
+}
+
+/**
+ * Fetch the full 10 Y daily price history with dates.
+ * Returns array of {date: string, price: number} objects.
+ */
+export async function fetch10YPriceHistoryWithDates(symbol: string): Promise<Array<{date: string, price: number}>> {
+  const timestamp = Date.now() + Math.random();
+  const requestId = Math.random().toString(36).substring(7);
+  
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await fetch(
+        `${BACKEND_BASE}/api/price-history?symbol=${symbol}&period=10y&interval=1d&_t=${timestamp}&_id=${requestId}&_attempt=${attempt}`,
+        {
+          headers: {
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+          }
+        }
+      );
+      
+      const data = await res.json();
+      
+      if (!res.ok) {
+        if (attempt < 3) {
+          await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+          continue;
+        }
+        throw new Error(`API failed for ${symbol} after ${attempt} attempts`);
+      }
+      
+      if (!data.prices) {
+        if (attempt < 3) {
+          await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+          continue;
+        }
+        throw new Error('No data returned for ' + symbol);
+      }
+      
+      // If dates are provided, pair them with prices
+      if (data.dates && Array.isArray(data.dates) && data.dates.length === data.prices.length) {
+        return data.prices.map((p: number[] | number, i: number) => {
+          const price = Array.isArray(p) ? p[0] : p;
+          const date = data.dates[i];
+          return { date, price };
+        });
+      }
+      
+      // If dates not provided, generate them from the price array
+      // Assume prices are in chronological order (oldest first, newest last)
+      // Calculate approximate dates based on trading days (252 per year)
+      const now = new Date();
+      const numPrices = data.prices.length;
+      const totalTradingDays = numPrices - 1; // Days between first and last price
+      const startDate = new Date(now);
+      startDate.setDate(startDate.getDate() - Math.floor(totalTradingDays * 365 / 252));
+      
+      return data.prices.map((p: number[] | number, i: number) => {
+        const price = Array.isArray(p) ? p[0] : p;
+        // Calculate date: add i trading days to start date
+        const date = new Date(startDate);
+        const daysToAdd = Math.floor(i * 365 / 252); // Approximate calendar days
+        date.setDate(date.getDate() + daysToAdd);
+        return { date: date.toISOString().split('T')[0], price };
+      });
+    } catch (error) {
+      if (attempt < 3) {
+        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+      } else {
         throw error;
       }
     }

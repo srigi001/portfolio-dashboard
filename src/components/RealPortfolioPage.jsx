@@ -3,11 +3,19 @@ import React, { useState, useEffect } from 'react';
 import ReactECharts from 'echarts-for-react';
 import dayjs from 'dayjs';
 import { fetchPortfolioData } from '../utils/googleSheets';
-import { fetchAssetData } from '../utils/calcMetrics';
+import { fetchAssetData, fetch10YPriceHistoryWithDates } from '../utils/calcMetrics';
 import { supabase } from '../utils/supabaseClient';
 
+// Helper function to get current date normalized to first of month (YYYY-MM-01)
+const getCurrentMonthStart = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  return `${year}-${month}-01`;
+};
+
 // Inline component for one-time deposit input per asset
-function OneTimeDepositInput({ asset, oneTimeDeposit, onSet, onRemove }) {
+function OneTimeDepositInput({ asset, oneTimeDeposit, onSet, onRemove, formatCurrency }) {
   // Initialize state from prop, converting number to string for input field
   const [amount, setAmount] = useState(() => {
     if (oneTimeDeposit?.amount) {
@@ -119,7 +127,7 @@ function OneTimeDepositInput({ asset, oneTimeDeposit, onSet, onRemove }) {
           <div className="text-xs text-green-700">
             <div className="font-medium">Current One-Time Deposit:</div>
             <div className="mt-1">
-              ${oneTimeDeposit.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} on {oneTimeDeposit.date}
+              {formatCurrency ? formatCurrency(oneTimeDeposit.amount) : `$${oneTimeDeposit.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} on {oneTimeDeposit.date}
             </div>
             <div className="mt-1 text-gray-600 italic">
               (Will be applied on the 1st of the deposit month)
@@ -136,7 +144,7 @@ function OneTimeDepositInput({ asset, oneTimeDeposit, onSet, onRemove }) {
 }
 
 // Inline component for monthly deposit input per asset
-function MonthlyDepositInput({ asset, monthlyDeposits, onAdd, onRemove }) {
+function MonthlyDepositInput({ asset, monthlyDeposits, onAdd, onRemove, formatCurrency }) {
   const [amount, setAmount] = useState('');
   const [date, setDate] = useState('');
 
@@ -212,7 +220,7 @@ function MonthlyDepositInput({ asset, monthlyDeposits, onAdd, onRemove }) {
                   <tr key={deposit.id}>
                     <td className="px-3 py-2 text-sm text-gray-900">{deposit.date}</td>
                     <td className="px-3 py-2 text-sm text-gray-900">
-                      ${deposit.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      {formatCurrency(deposit.amount)}
                     </td>
                     <td className="px-3 py-2 text-sm">
                       <button
@@ -308,6 +316,22 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     return cached ? JSON.parse(cached) : {};
   });
   const [isSimulatingAll, setIsSimulatingAll] = useState(false);
+  const [priceHistory, setPriceHistory] = useState(() => {
+    // Load cached price history from user-specific localStorage
+    const cached = localStorage.getItem(getUserKey('priceHistory'));
+    return cached ? JSON.parse(cached) : {};
+  });
+  const [currency, setCurrency] = useState(() => {
+    // Load cached currency preference
+    const cached = localStorage.getItem(getUserKey('currency'));
+    return cached || 'USD';
+  });
+  const [exchangeRate, setExchangeRate] = useState(() => {
+    // Load cached exchange rate
+    const cached = localStorage.getItem(getUserKey('exchangeRate'));
+    return cached ? parseFloat(cached) : 0;
+  });
+  const [currencyError, setCurrencyError] = useState('');
 
   // Google Sheets configuration - User-specific persistence
   const [googleSheetsId, setGoogleSheetsId] = useState(() => {
@@ -533,12 +557,22 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
         totalUSD: a.totalInvested
       })));
 
-      // Fetch current market data for each asset
+      // Fetch current market data and price history for each asset
       const assetsWithData = [];
+      const newPriceHistory = {};
       for (const asset of assets) {
         try {
           console.log(`🔍 Fetching data for ${asset.symbol}...`);
           const assetData = await fetchAssetData(asset.symbol);
+          
+          // Fetch price history with dates for historical chart
+          try {
+            const priceHistoryData = await fetch10YPriceHistoryWithDates(asset.symbol);
+            newPriceHistory[asset.symbol] = priceHistoryData;
+            console.log(`📈 Fetched ${priceHistoryData.length} price points with dates for ${asset.symbol}`);
+          } catch (e) {
+            console.warn(`⚠️ Failed to fetch price history for ${asset.symbol}:`, e);
+          }
           
           const assetWithData = {
             ...asset,
@@ -559,6 +593,10 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           assetsWithData.push(asset);
         }
       }
+      
+      // Store price history
+      setPriceHistory(newPriceHistory);
+      localStorage.setItem(getUserKey('priceHistory'), JSON.stringify(newPriceHistory));
 
       // Calculate current portfolio value using current market prices
       const totalPortfolioValue = Math.round((assetsWithData.reduce((sum, asset) => {
@@ -653,14 +691,24 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
         }
         
         // Get monthly deposits for this asset (convert from {id, date, amount} to {date, amount} for backend)
-        const assetMonthlyDeposits = (monthlyDeposits[asset.symbol] || []).map(d => ({
-          date: d.date,
-          amount: d.amount
-        }));
+        // Normalize dates to first of month (backend only checks dates on month boundaries)
+        const assetMonthlyDeposits = (monthlyDeposits[asset.symbol] || []).map(d => {
+          const dateParts = d.date.split('-');
+          const normalizedDate = dateParts.length === 3 ? `${dateParts[0]}-${dateParts[1]}-01` : d.date;
+          return {
+            date: normalizedDate,
+            amount: d.amount
+          };
+        });
+        
+        if (assetMonthlyDeposits.length > 0) {
+          console.log(`💰 Monthly deposits for ${asset.symbol}:`, assetMonthlyDeposits);
+        }
 
         // Build one-time deposits array: always include initial deposit, plus optional user deposit
+        const currentMonthStart = getCurrentMonthStart();
         const oneTimeDepositsArray = [{
-          date: '2025-01-01',
+          date: currentMonthStart,
           amount: asset.currentValue
         }];
         
@@ -703,6 +751,14 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           monthlyChanges: assetMonthlyDeposits,
           years: 10
         };
+        
+        console.log(`📊 Simulation payload for ${asset.symbol}:`, {
+          allocations: payload.allocations,
+          oneTimeDeposits: payload.oneTimeDeposits,
+          monthlyChanges: payload.monthlyChanges,
+          monthlyChangesCount: payload.monthlyChanges.length,
+          years: payload.years
+        });
         
         const res = await fetch(
           'https://investment-dashboard-backend-gm79.onrender.com/api/simulate',
@@ -774,7 +830,7 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     
     // Combine the pre-calculated simulation results
     const combinedResult = {
-      simulationStartDate: '2025-01-01',
+      simulationStartDate: getCurrentMonthStart(),
       months: selectedSimulations[0].months, // All should have same months
       mean: [],
       median: [],
@@ -846,10 +902,19 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
         : (monthlyDeposits[asset.symbol] || []);
       
       // Convert from {id, date, amount} to {date, amount} for backend
-      const assetMonthlyDeposits = depositsToUse.map(d => ({
-        date: d.date,
-        amount: d.amount
-      }));
+      // Normalize dates to first of month (backend only checks dates on month boundaries)
+      const assetMonthlyDeposits = depositsToUse.map(d => {
+        const dateParts = d.date.split('-');
+        const normalizedDate = dateParts.length === 3 ? `${dateParts[0]}-${dateParts[1]}-01` : d.date;
+        return {
+          date: normalizedDate,
+          amount: d.amount
+        };
+      });
+      
+      if (assetMonthlyDeposits.length > 0) {
+        console.log(`💰 Monthly deposits for ${asset.symbol} (re-simulation):`, assetMonthlyDeposits);
+      }
 
       // Get one-time deposit - use passed value if provided, otherwise use current state
       const oneTimeDepositToUse = currentOneTimeDeposit !== null
@@ -892,11 +957,11 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
 
       console.log(`📊 Re-simulation payload for ${asset.symbol} (${cagrType}):`, payload);
       console.log(`💰 One-time deposits breakdown:`, {
-        initialDeposit: { date: '2025-01-01', amount: asset.currentValue },
+        initialDeposit: { date: getCurrentMonthStart(), amount: asset.currentValue },
         userDeposit: oneTimeDepositToUse,
         normalizedUserDeposit: oneTimeDepositToUse && oneTimeDepositToUse.date && oneTimeDepositToUse.amount > 0 ? {
           originalDate: oneTimeDepositToUse.date,
-          normalizedDate: oneTimeDepositsArray.find(d => d.date !== '2025-01-01')?.date,
+          normalizedDate: oneTimeDepositsArray.find(d => d.date !== getCurrentMonthStart())?.date,
           amount: oneTimeDepositToUse.amount
         } : null,
         totalDeposits: oneTimeDepositsArray.length,
@@ -981,10 +1046,19 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
       }
       
       // Get monthly deposits for this asset (convert from {id, date, amount} to {date, amount} for backend)
-      const assetMonthlyDeposits = (monthlyDeposits[asset.symbol] || []).map(d => ({
-        date: d.date,
-        amount: d.amount
-      }));
+      // Normalize dates to first of month (backend only checks dates on month boundaries)
+      const assetMonthlyDeposits = (monthlyDeposits[asset.symbol] || []).map(d => {
+        const dateParts = d.date.split('-');
+        const normalizedDate = dateParts.length === 3 ? `${dateParts[0]}-${dateParts[1]}-01` : d.date;
+        return {
+          date: normalizedDate,
+          amount: d.amount
+        };
+      });
+      
+      if (assetMonthlyDeposits.length > 0) {
+        console.log(`💰 Monthly deposits for ${asset.symbol} (runAssetSimulation):`, assetMonthlyDeposits);
+      }
 
       // Build one-time deposits array: always include initial deposit, plus optional user deposit
       const oneTimeDepositsArray = [{
@@ -1098,8 +1172,12 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
             titleParts.push(`${mos} Month${mos !== 1 ? 's' : ''}`);
           }
 
-          const formatUSD = (v) =>
-            v !== undefined && v !== null ? `$${Math.round(v).toLocaleString('en-US')}` : 'N/A';
+          const formatUSD = (v) => {
+            if (v === undefined || v === null) return 'N/A';
+            const convertedValue = convertCurrency(v);
+            const symbol = currency === 'ILS' ? '₪' : '$';
+            return `${symbol}${Math.round(convertedValue).toLocaleString('en-US')}`;
+          };
 
           return `
             <div style="font-weight: bold; margin-bottom: 8px;">
@@ -1133,10 +1211,12 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
         min: yAxisMin, // Start at 95% of the minimum value to show proper starting point
         axisLabel: {
           formatter: (value) => {
-            if (value >= 1000000) {
-              return `$${(value / 1000000).toFixed(0)}M`;
+            const convertedValue = convertCurrency(value);
+            const symbol = currency === 'ILS' ? '₪' : '$';
+            if (convertedValue >= 1000000) {
+              return `${symbol}${(convertedValue / 1000000).toFixed(0)}M`;
             } else {
-              return `$${(value / 1000).toFixed(0)}k`;
+              return `${symbol}${(convertedValue / 1000).toFixed(0)}k`;
             }
           },
           fontSize: 10,
@@ -1168,6 +1248,171 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     };
   };
 
+  // Helper function to convert USD to ILS
+  const convertCurrency = (usdValue) => {
+    if (currency === 'ILS' && exchangeRate > 0) {
+      return usdValue * exchangeRate;
+    }
+    return usdValue;
+  };
+
+  // Helper function to format currency value
+  const formatCurrency = (value) => {
+    const convertedValue = convertCurrency(value);
+    const symbol = currency === 'ILS' ? '₪' : '$';
+    return `${symbol}${convertedValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
+
+  // Handle currency toggle
+  const handleCurrencyToggle = (newCurrency) => {
+    if (newCurrency === 'ILS' && (!exchangeRate || exchangeRate <= 0)) {
+      setCurrencyError('Please enter an exchange rate before switching to ₪');
+      return;
+    }
+    setCurrencyError('');
+    setCurrency(newCurrency);
+    localStorage.setItem(getUserKey('currency'), newCurrency);
+  };
+
+  // Handle exchange rate change
+  const handleExchangeRateChange = (value) => {
+    const rate = parseFloat(value) || 0;
+    setExchangeRate(rate);
+    localStorage.setItem(getUserKey('exchangeRate'), rate.toString());
+    if (rate > 0 && currencyError) {
+      setCurrencyError('');
+    }
+  };
+
+  // Helper function to normalize date to YYYY-MM-DD format
+  const normalizeDate = (dateStr) => {
+    if (!dateStr) return null;
+    
+    // If already in YYYY-MM-DD format, return as is (after removing time if present)
+    if (/^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
+      return dateStr.split('T')[0];
+    }
+    
+    // Try to parse various date formats
+    try {
+      const date = new Date(dateStr);
+      if (isNaN(date.getTime())) return null;
+      
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    } catch (e) {
+      console.warn('⚠️ Failed to parse date:', dateStr, e);
+      return null;
+    }
+  };
+
+  // Calculate historical portfolio value over time
+  const calculateHistoricalPortfolioValue = (assets, priceHistoryData) => {
+    if (!assets || assets.length === 0 || !priceHistoryData) return [];
+    
+    // Find earliest purchase date across all assets (for selected assets only)
+    const selectedSymbols = Object.keys(selectedAssets).filter(s => selectedAssets[s]);
+    if (selectedSymbols.length === 0) return [];
+    
+    const allPurchaseDates = [];
+    selectedSymbols.forEach(symbol => {
+      const asset = assets.find(a => a.symbol === symbol);
+      if (asset && asset.purchases && asset.purchases.length > 0) {
+        asset.purchases.forEach(p => {
+          if (p.date) {
+            const normalizedDate = normalizeDate(p.date);
+            if (normalizedDate) {
+              allPurchaseDates.push(normalizedDate);
+            }
+          }
+        });
+      }
+    });
+    
+    if (allPurchaseDates.length === 0) return [];
+    
+    // Sort dates and get the earliest and most recent purchase dates
+    const sortedPurchaseDates = allPurchaseDates.sort();
+    const earliestDate = sortedPurchaseDates[0];
+    const mostRecentPurchaseDate = sortedPurchaseDates[sortedPurchaseDates.length - 1];
+    
+    console.log('📅 Historical calculation:', {
+      earliestPurchaseDate: earliestDate,
+      mostRecentPurchaseDate: mostRecentPurchaseDate,
+      selectedSymbols,
+      allPurchaseDates: allPurchaseDates.slice(0, 5) // Show first 5 for debugging
+    });
+    
+    // Get all unique dates from price history (daily resolution)
+    // We need to merge dates from all selected assets to get a complete daily timeline
+    const allDatesSet = new Set();
+    
+    // First, collect all dates from all selected assets' price history
+    selectedSymbols.forEach(symbol => {
+      if (priceHistoryData[symbol]) {
+        priceHistoryData[symbol].forEach(({ date }) => {
+          // Only include dates from the first purchase onwards and up to the most recent purchase date
+          if (date >= earliestDate && date <= mostRecentPurchaseDate) {
+            allDatesSet.add(date);
+          }
+        });
+      }
+    });
+    
+    // Sort all dates to get chronological order
+    const sortedDates = Array.from(allDatesSet).sort();
+    if (sortedDates.length === 0) return [];
+    
+    console.log('📊 Historical data points:', {
+      totalDates: sortedDates.length,
+      firstDate: sortedDates[0],
+      lastDate: sortedDates[sortedDates.length - 1],
+      dateRange: `${sortedDates[0]} to ${sortedDates[sortedDates.length - 1]}`
+    });
+    
+    // Calculate portfolio value for each daily date
+    const historicalValues = sortedDates.map(date => {
+      let portfolioValue = 0;
+      
+      selectedSymbols.forEach(symbol => {
+        const asset = assets.find(a => a.symbol === symbol);
+        if (!asset || !asset.purchases) return;
+        
+        // Calculate cumulative shares owned up to this date
+        const cumulativeShares = asset.purchases
+          .filter(p => {
+            const purchaseDate = normalizeDate(p.date);
+            return purchaseDate && purchaseDate <= date;
+          })
+          .reduce((sum, p) => sum + (p.shares || 0), 0);
+        
+        // Find price for this date (or closest previous date)
+        if (priceHistoryData[symbol]) {
+          let price = null;
+          for (let i = priceHistoryData[symbol].length - 1; i >= 0; i--) {
+            if (priceHistoryData[symbol][i].date <= date) {
+              price = priceHistoryData[symbol][i].price;
+              break;
+            }
+          }
+          
+          if (price && cumulativeShares > 0) {
+            portfolioValue += price * cumulativeShares;
+          }
+        }
+      });
+      
+      return { date, value: portfolioValue };
+    });
+    
+    return {
+      values: historicalValues,
+      mostRecentPurchaseDate: mostRecentPurchaseDate
+    };
+  };
+
   const getCombinedSimulationOption = () => {
     if (!combinedSimulation) return {};
     
@@ -1175,15 +1420,102 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     const median = combinedSimulation.median;
     const percentile10 = combinedSimulation.percentile10;
     const percentile90 = combinedSimulation.percentile90;
+    const simulationStartDate = combinedSimulation.simulationStartDate || getCurrentMonthStart();
     
-    // Calculate Y-axis minimum (95% of minimum value)
-    const allValues = [...median, ...percentile10, ...percentile90];
+    // Parse the start date to use as base for x-axis
+    const startDate = dayjs(simulationStartDate);
+    
+    // Calculate historical portfolio value
+    const historicalResult = calculateHistoricalPortfolioValue(realPortfolioData?.assets || [], priceHistory);
+    const historicalData = historicalResult?.values || [];
+    const mostRecentPurchaseDate = historicalResult?.mostRecentPurchaseDate;
+    
+    if (!historicalData || historicalData.length === 0) {
+      // If no historical data, just show projections
+      return {};
+    }
+    
+    // Combine historical and projected dates
+    const historicalDates = historicalData.map(d => d.date);
+    const projectedDates = months.map((_, index) => {
+      const date = startDate.add(index, 'month');
+      return date.format('YYYY-MM-01');
+    });
+    
+    // Combine all dates, removing duplicates and sorting
+    const allDates = [...new Set([...historicalDates, ...projectedDates])].sort();
+    
+    // Find the index where historical ends (at most recent purchase date) and projection begins
+    // Historical data ends at the most recent purchase date, projection starts from the simulation start date
+    // Find the last historical date index (should be at or before the most recent purchase date)
+    let lastHistoricalIndex = -1;
+    if (mostRecentPurchaseDate) {
+      for (let i = allDates.length - 1; i >= 0; i--) {
+        if (allDates[i] <= mostRecentPurchaseDate) {
+          lastHistoricalIndex = i;
+          break;
+        }
+      }
+    } else {
+      // Fallback: use the last historical date if mostRecentPurchaseDate is not available
+      lastHistoricalIndex = historicalDates.length > 0 
+        ? allDates.findIndex(d => d === historicalDates[historicalDates.length - 1])
+        : -1;
+    }
+    
+    // Find the first projection date index
+    // Projections are monthly and start from the simulation start date (first of current month)
+    // We want to show projections starting from the current month
+    const firstProjectionDate = simulationStartDate; // e.g., "2025-11-01"
+    let finalProjectionStartIndex = allDates.findIndex(d => {
+      // Find the first date that is a projection date and is >= simulation start date
+      return projectedDates.includes(d) && d >= firstProjectionDate;
+    });
+    
+    // Safety check: if no projection found, use the first projection date
+    if (finalProjectionStartIndex < 0) {
+      finalProjectionStartIndex = allDates.findIndex(d => projectedDates.includes(d));
+    }
+    
+    // Ensure historical data doesn't extend beyond the most recent purchase date
+    // This ensures a clear visual separation between actual historical data and projections
+    
+    // Build data arrays: historical values + projected values
+    // Historical data should only show up to the most recent purchase date
+    const historicalValuesArray = allDates.map((date, idx) => {
+      // Only show historical data up to the most recent purchase date
+      if (idx > lastHistoricalIndex) return null;
+      const histPoint = historicalData.find(d => d.date === date);
+      return histPoint ? histPoint.value : null;
+    });
+    
+    const medianArray = allDates.map((date, idx) => {
+      if (idx < finalProjectionStartIndex) return null; // Historical period
+      const projIdx = projectedDates.indexOf(date);
+      return projIdx >= 0 ? median[projIdx] : null;
+    });
+    
+    const percentile10Array = allDates.map((date, idx) => {
+      if (idx < finalProjectionStartIndex) return null;
+      const projIdx = projectedDates.indexOf(date);
+      return projIdx >= 0 ? percentile10[projIdx] : null;
+    });
+    
+    const percentile90Array = allDates.map((date, idx) => {
+      if (idx < finalProjectionStartIndex) return null;
+      const projIdx = projectedDates.indexOf(date);
+      return projIdx >= 0 ? percentile90[projIdx] : null;
+    });
+    
+    // Calculate Y-axis minimum (95% of minimum value) including historical data
+    const historicalValues = historicalData.map(d => d.value);
+    const allValues = [...historicalValues.filter(v => v > 0), ...median.filter(v => v > 0), ...percentile10.filter(v => v > 0), ...percentile90.filter(v => v > 0)];
     const minValue = Math.min(...allValues);
     const yAxisMin = Math.max(0, minValue * 0.95);
     
     return {
       title: {
-        text: 'Combined Portfolio - 10 Year Projection',
+        text: 'Combined Portfolio - Historical & Projected',
         left: 'center',
         top: 10,
         textStyle: { color: '#1f2937', fontSize: 14 },
@@ -1192,67 +1524,176 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
         trigger: 'axis',
         formatter: (params) => {
           const idx = params[0]?.dataIndex || 0;
-          const yrs = Math.floor(idx / 12);
-          const mos = idx % 12;
-          const date = dayjs().add(idx, 'month');
+          const dateStr = allDates[idx];
+          const date = dayjs(dateStr);
+          
+          const formatUSD = (v) => {
+            if (v === undefined || v === null) return 'N/A';
+            const convertedValue = convertCurrency(v);
+            const symbol = currency === 'ILS' ? '₪' : '$';
+            return `${symbol}${Math.round(convertedValue).toLocaleString('en-US')}`;
+          };
 
-          const titleParts = [];
-          if (yrs > 0) {
-            titleParts.push(`${yrs} Year${yrs !== 1 ? 's' : ''}`);
-          }
-          if (mos > 0) {
-            titleParts.push(`${mos} Month${mos !== 1 ? 's' : ''}`);
-          }
+          // Format date: show day for historical data, month/year for projected
+          // Check if this is actually historical data (has historical value) rather than just checking index
+          const isHistoricalData = historicalValuesArray[idx] !== null;
+          const dateFormat = isHistoricalData
+            ? date.format('MMM DD, YYYY')  // Daily format: "Nov 16, 2025"
+            : date.format('MMM YYYY');      // Monthly format: "Nov 2025"
 
-          const formatUSD = (v) =>
-            v !== undefined && v !== null ? `$${Math.round(v).toLocaleString('en-US')}` : 'N/A';
-
-          return `
+          let tooltipContent = `
             <div style="font-weight: bold; margin-bottom: 8px;">
-              ${titleParts.join(', ')} (${date.format('MMM YYYY')})
-            </div>
-            <div style="margin-bottom: 4px;">
-              <span style="color: #10b981;">●</span> Median: ${formatUSD(median[idx])}
-            </div>
-            <div style="margin-bottom: 4px;">
-              <span style="color: #3b82f6;">●</span> 10th Percentile: ${formatUSD(percentile10[idx])}
-            </div>
-            <div style="margin-bottom: 4px;">
-              <span style="color: #ef4444;">●</span> 90th Percentile: ${formatUSD(percentile90[idx])}
+              ${dateFormat}
             </div>
           `;
+          
+          // Add historical value if available
+          if (historicalValuesArray[idx] !== null) {
+            tooltipContent += `
+              <div style="margin-bottom: 4px;">
+                <span style="color: #6366f1;">●</span> Historical: ${formatUSD(historicalValuesArray[idx])}
+              </div>
+            `;
+          }
+          
+          // Add projected values if available
+          if (medianArray[idx] !== null) {
+            tooltipContent += `
+              <div style="margin-bottom: 4px;">
+                <span style="color: #3b82f6;">●</span> Median: ${formatUSD(medianArray[idx])}
+              </div>
+              <div style="margin-bottom: 4px;">
+                <span style="color: #3b82f6;">●</span> 10th Percentile: ${formatUSD(percentile10Array[idx])}
+              </div>
+              <div style="margin-bottom: 4px;">
+                <span style="color: #10b981;">●</span> 90th Percentile: ${formatUSD(percentile90Array[idx])}
+              </div>
+            `;
+          }
+          
+          return tooltipContent;
         },
       },
       legend: {
-        data: ['10th Percentile', 'Median', '90th Percentile'],
+        data: ['Historical Portfolio Value', '10th Percentile', 'Median', '90th Percentile'],
         top: 30,
       },
       grid: {
         left: '3%',
         right: '4%',
-        bottom: '3%',
+        bottom: '15%', // Increased bottom margin for zoom slider
         top: '15%',
         containLabel: true,
       },
+      dataZoom: [
+        {
+          type: 'slider',
+          show: true,
+          xAxisIndex: [0],
+          start: 0, // Start showing from beginning
+          end: 100, // Show all data initially
+          bottom: 10,
+          height: 20,
+          handleIcon: 'M10.7,11.9v-1.3H9.3v1.3c-4.9,0.3-8.8,4.4-8.8,9.4c0,5,3.9,9.1,8.8,9.4v1.3h1.3v-1.3c4.9-0.3,8.8-4.4,8.8-9.4C19.5,16.3,15.6,12.2,10.7,11.9z M13.3,24.4H6.7V23.1h6.6V24.4z M13.3,19.6H6.7v-1.4h6.6V19.6z',
+          handleSize: '80%',
+          handleStyle: {
+            color: '#3b82f6',
+            shadowBlur: 3,
+            shadowColor: 'rgba(0, 0, 0, 0.6)',
+            shadowOffsetX: 2,
+            shadowOffsetY: 2
+          },
+          textStyle: {
+            color: '#6b7280',
+            fontSize: 10
+          },
+          borderColor: '#e5e7eb',
+          fillerColor: 'rgba(59, 130, 246, 0.2)',
+          dataBackground: {
+            lineStyle: {
+              color: '#9ca3af',
+              width: 1
+            },
+            areaStyle: {
+              color: '#f3f4f6'
+            }
+          },
+          selectedDataBackground: {
+            lineStyle: {
+              color: '#3b82f6',
+              width: 2
+            },
+            areaStyle: {
+              color: 'rgba(59, 130, 246, 0.3)'
+            }
+          },
+          moveHandleStyle: {
+            color: '#3b82f6'
+          }
+        },
+        {
+          type: 'inside',
+          xAxisIndex: [0],
+          start: 0,
+          end: 100,
+          zoomOnMouseWheel: true, // Enable mouse wheel zoom
+          moveOnMouseMove: true, // Enable pan with mouse drag
+          moveOnMouseWheel: false // Disable move on wheel (use zoom instead)
+        }
+      ],
       xAxis: {
         type: 'category',
-        data: months.map((_, index) => {
-          const year = Math.floor(index / 12);
-          const month = index % 12;
-          const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-          return `${monthNames[month]} ${2025 + year}`;
+        data: allDates.map((date, idx) => {
+          const dateObj = dayjs(date);
+          // For historical data (daily), show daily labels
+          // For projected data (monthly), show monthly labels
+          // Check if this is actually historical data (has historical value)
+          const isHistoricalData = historicalValuesArray[idx] !== null;
+          if (isHistoricalData) {
+            // Daily labels for historical - show date
+            return dateObj.format('MMM DD');
+          } else {
+            // Monthly labels for projected
+            return dateObj.format('MMM YYYY');
+          }
         }),
-        axisLabel: { fontSize: 10 },
+        axisLabel: { 
+          fontSize: 10, 
+          rotate: 45,
+          interval: (index, value) => {
+            // Auto-hide labels to prevent crowding
+            // For daily historical data, show labels based on data density
+            const isHistoricalData = historicalValuesArray[index] !== null;
+            if (isHistoricalData) {
+              // Count total historical data points
+              const totalHistorical = historicalValuesArray.filter(v => v !== null).length;
+              if (totalHistorical > 365) {
+                // More than a year: show weekly labels (every ~7 days)
+                return index % 7 === 0;
+              } else if (totalHistorical > 90) {
+                // More than 3 months: show every 3 days
+                return index % 3 === 0;
+              } else {
+                // Less than 3 months: show every day
+                return true;
+              }
+            }
+            // For projected monthly data, show all labels
+            return true;
+          }
+        },
       },
       yAxis: {
         type: 'value',
         min: yAxisMin,
         axisLabel: {
           formatter: (value) => {
-            if (value >= 1000000) {
-              return `$${(value / 1000000).toFixed(0)}M`;
+            const convertedValue = convertCurrency(value);
+            const symbol = currency === 'ILS' ? '₪' : '$';
+            if (convertedValue >= 1000000) {
+              return `${symbol}${(convertedValue / 1000000).toFixed(0)}M`;
             } else {
-              return `$${(value / 1000).toFixed(0)}k`;
+              return `${symbol}${(convertedValue / 1000).toFixed(0)}k`;
             }
           },
           fontSize: 10,
@@ -1260,8 +1701,22 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
       },
       series: [
         {
+          name: 'Historical Portfolio Value',
+          data: historicalValuesArray,
+          type: 'line',
+          smooth: true,
+          lineStyle: { color: '#6366f1', width: 2 },
+          itemStyle: { color: '#6366f1' },
+          markLine: {
+            silent: true,
+            lineStyle: { color: '#9ca3af', width: 1, type: 'dashed' },
+            data: [{ xAxis: finalProjectionStartIndex >= 0 ? finalProjectionStartIndex : allDates.length - 1 }],
+            label: { show: false },
+          },
+        },
+        {
           name: '10th Percentile',
-          data: percentile10,
+          data: percentile10Array,
           type: 'line',
           smooth: true,
           lineStyle: { color: '#ef4444', width: 2 },
@@ -1269,7 +1724,7 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
         },
         {
           name: 'Median',
-          data: median,
+          data: medianArray,
           type: 'line',
           smooth: true,
           lineStyle: { color: '#3b82f6', width: 3 },
@@ -1277,7 +1732,7 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
         },
         {
           name: '90th Percentile',
-          data: percentile90,
+          data: percentile90Array,
           type: 'line',
           smooth: true,
           lineStyle: { color: '#10b981', width: 2 },
@@ -1525,13 +1980,55 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
       {/* Real Portfolio Data Display */}
       {realPortfolioData && (
         <div className="bg-white rounded-lg shadow-md p-6">
-          <h2 className="text-lg font-semibold mb-4">Portfolio Overview</h2>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold">Portfolio Overview</h2>
+            
+            {/* Currency Toggle */}
+            <div className="flex items-center space-x-3">
+              <label className="text-sm text-gray-700">Exchange Rate (USD to ₪):</label>
+              <input
+                type="number"
+                value={exchangeRate || ''}
+                onChange={(e) => handleExchangeRateChange(e.target.value)}
+                placeholder="e.g., 3.5"
+                step="0.01"
+                min="0"
+                className="w-24 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <div className="flex items-center space-x-2">
+                <span className={`text-sm font-medium ${currency === 'USD' ? 'text-blue-600' : 'text-gray-400'}`}>$</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const newCurrency = currency === 'USD' ? 'ILS' : 'USD';
+                    handleCurrencyToggle(newCurrency);
+                  }}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+                    currency === 'ILS' ? 'bg-blue-600' : 'bg-gray-300'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      currency === 'ILS' ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+                <span className={`text-sm font-medium ${currency === 'ILS' ? 'text-blue-600' : 'text-gray-400'}`}>₪</span>
+              </div>
+            </div>
+          </div>
+          
+          {currencyError && (
+            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-600">
+              {currencyError}
+            </div>
+          )}
           
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
             <div className="bg-blue-50 p-4 rounded text-center">
-              <div className="text-sm text-blue-600">Total Value (USD)</div>
+              <div className="text-sm text-blue-600">Total Value ({currency === 'ILS' ? '₪' : 'USD'})</div>
               <div className="text-2xl font-bold">
-                ${realPortfolioData.totalValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {formatCurrency(realPortfolioData.totalValue)}
               </div>
             </div>
             <div className="bg-green-50 p-4 rounded text-center">
@@ -1570,7 +2067,7 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
                         className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                       />
                       <span className="text-sm text-gray-700 flex items-center space-x-2">
-                        <span>{asset.symbol} (${asset.currentValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} - {cagrTypes[asset.symbol] || '5Y'})</span>
+                        <span>{asset.symbol} ({formatCurrency(asset.currentValue)} - {cagrTypes[asset.symbol] || '5Y'})</span>
                         {reSimulatingAssets.has(asset.symbol) && (
                           <span className="text-xs text-blue-600 flex items-center">
                             <svg className="animate-spin h-3 w-3 mr-1" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -1589,12 +2086,12 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
               {/* Selected Value Display */}
               <div className="mb-4">
                 <div className="text-sm text-gray-600">
-                  Total Selected Value: ${Object.keys(selectedAssets)
+                  Total Selected Value: {formatCurrency(Object.keys(selectedAssets)
                     .filter(symbol => selectedAssets[symbol])
                     .reduce((sum, symbol) => {
                       const asset = realPortfolioData.assets.find(a => a.symbol === symbol);
                       return sum + (asset?.currentValue || 0);
-                    }, 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    }, 0))}
                 </div>
               </div>
 
@@ -1638,13 +2135,13 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
                     <div className="flex items-center space-x-4">
                       <div className="text-lg font-semibold text-gray-900">{asset.symbol}</div>
                       <span className="px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-800">
-                        ${asset.currentPrice?.toFixed(2) || 'N/A'}
+                        {formatCurrency(asset.currentPrice || 0)}
                       </span>
                       <div className="text-sm text-gray-600">
                         Total Shares: {asset.totalShares.toLocaleString()}
                       </div>
                       <div className="text-sm text-gray-600">
-                        Total Invested: ${asset.totalInvested.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        Total Invested: {formatCurrency(asset.totalInvested)}
                       </div>
                     </div>
                     <div className="flex items-center space-x-4">
@@ -1723,6 +2220,7 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
                   key={`monthly-${asset.symbol}-${(monthlyDeposits[asset.symbol] || []).length}`}
                   asset={asset}
                   monthlyDeposits={monthlyDeposits[asset.symbol] || []}
+                  formatCurrency={formatCurrency}
                   onAdd={(deposit) => {
                     const currentDeposits = monthlyDeposits[asset.symbol] || [];
                     const updatedDeposits = [...currentDeposits, deposit];
@@ -1782,12 +2280,12 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
                             <tr key={pIndex}>
                               <td className="px-3 py-2 text-sm text-gray-900">{purchase.date}</td>
                               <td className="px-3 py-2 text-sm text-gray-500">{purchase.shares.toLocaleString()}</td>
-                              <td className="px-3 py-2 text-sm text-gray-500">${purchase.priceUSD.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                              <td className="px-3 py-2 text-sm text-gray-500">{formatCurrency(purchase.priceUSD)}</td>
                               <td className={`px-3 py-2 text-sm font-medium ${isPositive ? 'text-green-600' : 'text-red-600'}`}>
                                 {priceChange >= 0 ? '+' : ''}{priceChange.toFixed(2)}%
                               </td>
                               <td className={`px-3 py-2 text-sm font-medium ${isPositive ? 'text-green-600' : 'text-red-600'}`}>
-                                {dollarYield >= 0 ? '+' : ''}${dollarYield.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                {dollarYield >= 0 ? '+' : ''}{formatCurrency(dollarYield)}
                               </td>
                             </tr>
                           );
