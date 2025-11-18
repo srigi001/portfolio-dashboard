@@ -1420,10 +1420,6 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     const median = combinedSimulation.median;
     const percentile10 = combinedSimulation.percentile10;
     const percentile90 = combinedSimulation.percentile90;
-    const simulationStartDate = combinedSimulation.simulationStartDate || getCurrentMonthStart();
-    
-    // Parse the start date to use as base for x-axis
-    const startDate = dayjs(simulationStartDate);
     
     // Calculate historical portfolio value
     const historicalResult = calculateHistoricalPortfolioValue(realPortfolioData?.assets || [], priceHistory);
@@ -1435,12 +1431,39 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
       return {};
     }
     
+    // Calculate projection start date: first of the month AFTER the most recent purchase date
+    let projectionStartDate;
+    let monthOffset = 0; // How many months to skip from the simulation data
+    if (mostRecentPurchaseDate) {
+      const purchaseDate = dayjs(mostRecentPurchaseDate);
+      // Get the first of the next month after the purchase date
+      projectionStartDate = purchaseDate.add(1, 'month').startOf('month').format('YYYY-MM-DD');
+      
+      // Calculate offset: if simulation started earlier than projection start, skip those months
+      const simulationStartDate = combinedSimulation.simulationStartDate || getCurrentMonthStart();
+      const simStart = dayjs(simulationStartDate);
+      const projStart = dayjs(projectionStartDate);
+      
+      if (projStart.isAfter(simStart)) {
+        // Calculate how many months to skip
+        monthOffset = projStart.diff(simStart, 'month');
+      }
+    } else {
+      // Fallback to simulation start date or current month start
+      projectionStartDate = combinedSimulation.simulationStartDate || getCurrentMonthStart();
+    }
+    
+    // Parse the start date to use as base for x-axis
+    const startDate = dayjs(projectionStartDate);
+    
     // Combine historical and projected dates
     const historicalDates = historicalData.map(d => d.date);
     const projectedDates = months.map((_, index) => {
-      const date = startDate.add(index, 'month');
+      // Skip months before the projection start date
+      if (index < monthOffset) return null;
+      const date = startDate.add(index - monthOffset, 'month');
       return date.format('YYYY-MM-01');
-    });
+    }).filter(d => d !== null); // Remove null entries
     
     // Combine all dates, removing duplicates and sorting
     const allDates = [...new Set([...historicalDates, ...projectedDates])].sort();
@@ -1464,12 +1487,10 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     }
     
     // Find the first projection date index
-    // Projections are monthly and start from the simulation start date (first of current month)
-    // We want to show projections starting from the current month
-    const firstProjectionDate = simulationStartDate; // e.g., "2025-11-01"
+    // Projections are monthly and start from the first of the month AFTER the most recent purchase
     let finalProjectionStartIndex = allDates.findIndex(d => {
-      // Find the first date that is a projection date and is >= simulation start date
-      return projectedDates.includes(d) && d >= firstProjectionDate;
+      // Find the first date that is a projection date and is >= projection start date
+      return projectedDates.includes(d) && d >= projectionStartDate;
     });
     
     // Safety check: if no projection found, use the first projection date
@@ -1492,19 +1513,20 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     const medianArray = allDates.map((date, idx) => {
       if (idx < finalProjectionStartIndex) return null; // Historical period
       const projIdx = projectedDates.indexOf(date);
-      return projIdx >= 0 ? median[projIdx] : null;
+      // Add monthOffset to get the correct index in the simulation data arrays
+      return projIdx >= 0 && (projIdx + monthOffset) < median.length ? median[projIdx + monthOffset] : null;
     });
     
     const percentile10Array = allDates.map((date, idx) => {
       if (idx < finalProjectionStartIndex) return null;
       const projIdx = projectedDates.indexOf(date);
-      return projIdx >= 0 ? percentile10[projIdx] : null;
+      return projIdx >= 0 && (projIdx + monthOffset) < percentile10.length ? percentile10[projIdx + monthOffset] : null;
     });
     
     const percentile90Array = allDates.map((date, idx) => {
       if (idx < finalProjectionStartIndex) return null;
       const projIdx = projectedDates.indexOf(date);
-      return projIdx >= 0 ? percentile90[projIdx] : null;
+      return projIdx >= 0 && (projIdx + monthOffset) < percentile90.length ? percentile90[projIdx + monthOffset] : null;
     });
     
     // Calculate Y-axis minimum (95% of minimum value) including historical data
@@ -1707,14 +1729,6 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           smooth: true,
           lineStyle: { color: '#6366f1', width: 2 },
           itemStyle: { color: '#6366f1' },
-          markLine: {
-            silent: true,
-            lineStyle: { color: '#9ca3af', width: 1, type: 'dashed' },
-            data: [{ xAxis: finalProjectionStartIndex >= 0 ? finalProjectionStartIndex : allDates.length - 1 }],
-            label: { show: false },
-            symbol: ['none', 'none'], // Remove arrow symbols at both ends
-            symbolSize: 0, // Ensure no symbols are shown
-          },
         },
         {
           name: '10th Percentile',
