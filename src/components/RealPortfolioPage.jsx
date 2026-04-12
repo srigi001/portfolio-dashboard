@@ -540,6 +540,9 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     }
 
     setIsSyncing(true);
+    setSyncStatus('🔄 Fetching live exchange rates...');
+    await handleFetchRates(); // Force update rates dynamically before using them
+
     setSyncStatus('🔄 Syncing with Google Sheets...');
     
     try {
@@ -563,19 +566,32 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
       const assetsWithData = [];
       const newPriceHistory = {};
       for (const asset of assets) {
-        try {
-          console.log(`🔍 Fetching data for ${asset.symbol}...`);
-          const assetData = await fetchAssetData(asset.symbol);
-          
-          // Fetch price history with dates for historical chart
+        let assetData = null;
+        let lastError = null;
+
+        for (let attempt = 1; attempt <= 3; attempt++) {
           try {
+            console.log(`🔍 Fetching data for ${asset.symbol} (Attempt ${attempt}/3)...`);
+            assetData = await fetchAssetData(asset.symbol);
+            
+            // Fetch price history with dates for historical chart
             const priceHistoryData = await fetch10YPriceHistoryWithDates(asset.symbol);
             newPriceHistory[asset.symbol] = priceHistoryData;
             console.log(`📈 Fetched ${priceHistoryData.length} price points with dates for ${asset.symbol}`);
+            
+            // Asset data and history stored successfully, break retry loop!
+            break;
           } catch (e) {
-            console.warn(`⚠️ Failed to fetch price history for ${asset.symbol}:`, e);
+            console.warn(`⚠️ Attempt ${attempt} failed for ${asset.symbol}:`, e);
+            lastError = e;
+            assetData = null; // Ensure null if history fetch threw
+            if (attempt < 3) {
+              await new Promise(r => setTimeout(r, 1000)); // Wait 1 second before retrying
+            }
           }
-          
+        }
+        
+        if (assetData) {
           const assetWithData = {
             ...asset,
             cagr5Y: assetData.cagr5Y,
@@ -586,13 +602,13 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
             volatilityBlended: assetData.volatilityBlended,
             currentPrice: assetData.currentPrice, // Last price from 10Y data
           };
-          
-          // Asset data stored successfully
-          
           assetsWithData.push(assetWithData);
-        } catch (e) {
-          console.warn(`Failed to fetch data for ${asset.symbol}:`, e);
-          assetsWithData.push(asset);
+        } else {
+          console.error(`❌ Completely failed to fetch data for ${asset.symbol} after 3 attempts:`, lastError);
+          assetsWithData.push({
+            ...asset,
+            priceError: lastError?.message || 'API Timeout or Invalid Ticker'
+          });
         }
       }
       
@@ -2208,7 +2224,7 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
                     <div className="flex items-center space-x-4">
                       <div className="text-lg font-semibold text-gray-900">{asset.symbol}</div>
                       {asset.isPriceMissing || (!asset.currentPrice && !asset.currentPriceUSD) ? (
-                        <span className="px-2 py-1 rounded text-xs font-medium bg-amber-100 text-amber-800 flex items-center space-x-1" title="Market price unavailable. Falling back to average historical purchase price (USD).">
+                        <span className="px-2 py-1 rounded text-xs font-medium bg-amber-100 text-amber-800 flex items-center space-x-1" title={`Market price unavailable (Error: ${asset.priceError || '0 values returned'}). Falling back to average historical purchase price.`}>
                           <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
                           <span>{formatCurrency(asset.averageCostBasis || 0)} (Fallback)</span>
                         </span>
