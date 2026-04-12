@@ -218,9 +218,9 @@ export async function fetchAssetData(symbol: string) {
   console.log(`📊 API: ${symbol} - First price: ${prices10Y[0]}, Last price: ${prices10Y[prices10Y.length - 1]}`);
 
   // 2) derive the 5 Y & 1 Y subsets
-  const idxMid = Math.floor(prices10Y.length / 2);
+  const idx5Y = prices10Y.length - 1260; // ~1260 trading days in 5 years (5 * 252)
   const idx1Y = prices10Y.length - 252; // ~252 trading days in a year
-  const prices5Y = prices10Y.slice(idxMid);
+  const prices5Y = prices10Y.slice(idx5Y < 0 ? 0 : idx5Y);
   const prices1Y = prices10Y.slice(idx1Y < 0 ? 0 : idx1Y);
 
   // 3) calculate metrics

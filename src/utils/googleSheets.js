@@ -37,9 +37,10 @@ export async function readSpreadsheet(spreadsheetId, range = 'Universal!H:M') {
 /**
  * Parse portfolio data from spreadsheet rows
  * @param {Array} rows - Raw spreadsheet data
+ * @param {Object} customRates - Optional custom exchange rates { ilsRate, gbpRate }
  * @returns {Array} - Parsed asset data
  */
-export function parsePortfolioData(rows) {
+export function parsePortfolioData(rows, customRates = {}) {
   console.log('🔍 Parsing portfolio data from rows:', rows.length);
   console.log('🔍 Raw rows data:', rows);
   
@@ -84,7 +85,8 @@ export function parsePortfolioData(rows) {
   // Currency conversion rates (simplified - no CAD)
   const exchangeRates = {
     'USD': 1.0,
-    'ILS': 0.2933,  // ILS to USD rate (1/3.4093)
+    'ILS': customRates.ilsRate ? 1 / customRates.ilsRate : 0.2933,
+    'GBP': customRates.gbpRate ? customRates.gbpRate : 1.27,
   };
 
   // Group by symbol
@@ -176,11 +178,12 @@ export function parsePortfolioData(rows) {
  * Fetch and parse portfolio data from Google Sheets
  * @param {string} spreadsheetId - The spreadsheet ID
  * @param {string} range - The range to read
+ * @param {Object} customRates - Optional custom exchange rates { ilsRate, gbpRate }
  * @returns {Promise<Array>} - Parsed asset data
  */
-export async function fetchPortfolioData(spreadsheetId, range = 'Universal!H:M') {
+export async function fetchPortfolioData(spreadsheetId, range = 'Universal!H:M', customRates = {}) {
   console.log('🔍 Fetching real Google Sheets data...');
   
   const rows = await readSpreadsheet(spreadsheetId, range);
-  return parsePortfolioData(rows);
+  return parsePortfolioData(rows, customRates);
 } 

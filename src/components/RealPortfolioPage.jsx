@@ -253,6 +253,7 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
   };
 
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isFetchingRates, setIsFetchingRates] = useState(false);
   const [syncStatus, setSyncStatus] = useState('');
   const [realPortfolioData, setRealPortfolioData] = useState(() => {
     // Load cached data from user-specific localStorage
@@ -321,17 +322,14 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     const cached = localStorage.getItem(getUserKey('priceHistory'));
     return cached ? JSON.parse(cached) : {};
   });
-  const [currency, setCurrency] = useState(() => {
-    // Load cached currency preference
-    const cached = localStorage.getItem(getUserKey('currency'));
-    return cached || 'USD';
-  });
-  const [exchangeRate, setExchangeRate] = useState(() => {
-    // Load cached exchange rate
-    const cached = localStorage.getItem(getUserKey('exchangeRate'));
+  const [ilsExchangeRate, setIlsExchangeRate] = useState(() => {
+    const cached = localStorage.getItem(getUserKey('ilsExchangeRate'));
     return cached ? parseFloat(cached) : 0;
   });
-  const [currencyError, setCurrencyError] = useState('');
+  const [gbpExchangeRate, setGbpExchangeRate] = useState(() => {
+    const cached = localStorage.getItem(getUserKey('gbpExchangeRate'));
+    return cached ? parseFloat(cached) : 0;
+  });
 
   // Google Sheets configuration - User-specific persistence
   const [googleSheetsId, setGoogleSheetsId] = useState(() => {
@@ -548,7 +546,11 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
       console.log('🔍 Starting Google Sheets sync...');
       
       // Fetch portfolio data from Google Sheets
-      const assets = await fetchPortfolioData(googleSheetsId, GOOGLE_SHEETS_RANGE);
+      const customRates = {
+        ilsRate: ilsExchangeRate > 0 ? ilsExchangeRate : undefined,
+        gbpRate: gbpExchangeRate > 0 ? gbpExchangeRate : undefined
+      };
+      const assets = await fetchPortfolioData(googleSheetsId, GOOGLE_SHEETS_RANGE, customRates);
       console.log('📊 Fetched assets with currency conversion:', assets.map(a => ({
         symbol: a.symbol,
         currency: a.currency,
@@ -598,15 +600,19 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
       setPriceHistory(newPriceHistory);
       localStorage.setItem(getUserKey('priceHistory'), JSON.stringify(newPriceHistory));
 
-      // Calculate current portfolio value using current market prices
-      const totalPortfolioValue = Math.round((assetsWithData.reduce((sum, asset) => {
-        const currentMarketValue = (asset.currentPrice || 0) * asset.totalShares;
-        return sum + currentMarketValue;
-      }, 0)) * 100) / 100;
+      // Portfolio value will be calculated after normalization
+
+      const getUsdRateSync = (currency) => {
+        if (currency === 'ILS') return ilsExchangeRate > 0 ? 1 / ilsExchangeRate : 0.2933;
+        if (currency === 'GBP') return gbpExchangeRate > 0 ? gbpExchangeRate : 1.27;
+        return 1.0;
+      };
 
       const assetsWithValues = assetsWithData.map(asset => {
         const totalInvested = Math.round((asset.purchases.reduce((sum, p) => sum + p.totalUSD, 0)) * 100) / 100;
-        const currentValue = Math.round(((asset.currentPrice || 0) * asset.totalShares) * 100) / 100;
+        const rate = getUsdRateSync(asset.currency);
+        const currentPriceUSD = (asset.currentPrice || 0) * rate;
+        const currentValue = Math.round((currentPriceUSD * asset.totalShares) * 100) / 100;
         
         console.log(`💰 ${asset.symbol} calculations:`, {
           currentPrice: asset.currentPrice,
@@ -618,9 +624,13 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
         return {
           ...asset,
           totalInvested: totalInvested,
-          currentValue: currentValue
+          currentValue: currentValue,
+          currentPriceUSD: currentPriceUSD
         };
       });
+
+      // Calculate current portfolio value using current market prices (normalized to USD)
+      const totalPortfolioValue = Math.round((assetsWithValues.reduce((sum, asset) => sum + asset.currentValue, 0)) * 100) / 100;
 
       console.log('📊 Portfolio summary:', {
         totalValue: totalPortfolioValue,
@@ -1174,9 +1184,10 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
 
           const formatUSD = (v) => {
             if (v === undefined || v === null) return 'N/A';
-            const convertedValue = convertCurrency(v);
-            const symbol = currency === 'ILS' ? '₪' : '$';
-            return `${symbol}${Math.round(convertedValue).toLocaleString('en-US')}`;
+            const usd = `$${Math.round(v).toLocaleString('en-US')}`;
+            const rate = ilsExchangeRate > 0 ? ilsExchangeRate : 3.4;
+            const ils = `₪${Math.round(v * rate).toLocaleString('en-US')}`;
+            return `${usd} | ${ils}`;
           };
 
           return `
@@ -1211,13 +1222,9 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
         min: yAxisMin, // Start at 95% of the minimum value to show proper starting point
         axisLabel: {
           formatter: (value) => {
-            const convertedValue = convertCurrency(value);
-            const symbol = currency === 'ILS' ? '₪' : '$';
-            if (convertedValue >= 1000000) {
-              return `${symbol}${(convertedValue / 1000000).toFixed(0)}M`;
-            } else {
-              return `${symbol}${(convertedValue / 1000).toFixed(0)}k`;
-            }
+            if (value >= 1000000) return `$${(value / 1000000).toFixed(0)}M`;
+            if (value >= 1000) return `$${(value / 1000).toFixed(0)}k`;
+            return `$${value}`;
           },
           fontSize: 10,
         },
@@ -1248,39 +1255,69 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     };
   };
 
-  // Helper function to convert USD to ILS
-  const convertCurrency = (usdValue) => {
-    if (currency === 'ILS' && exchangeRate > 0) {
-      return usdValue * exchangeRate;
-    }
-    return usdValue;
+  // Helper function to format native asset currency
+  const formatAssetCurrency = (value, assetCurrency) => {
+    let symbol = '$';
+    if (assetCurrency === 'GBP') symbol = '£';
+    else if (assetCurrency === 'ILS') symbol = '₪';
+    else if (assetCurrency === 'EUR') symbol = '€';
+    return `${symbol}${Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
-  // Helper function to format currency value
+  // Helper function to get USD rate for a specific currency
+  const getUsdRate = (currency) => {
+    if (currency === 'ILS') return ilsExchangeRate > 0 ? 1 / ilsExchangeRate : 0.2933;
+    if (currency === 'GBP') return gbpExchangeRate > 0 ? gbpExchangeRate : 1.27;
+    return 1.0;
+  };
+
+  // Format currency value in USD
   const formatCurrency = (value) => {
-    const convertedValue = convertCurrency(value);
-    const symbol = currency === 'ILS' ? '₪' : '$';
-    return `${symbol}${convertedValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    return `$${Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
-  // Handle currency toggle
-  const handleCurrencyToggle = (newCurrency) => {
-    if (newCurrency === 'ILS' && (!exchangeRate || exchangeRate <= 0)) {
-      setCurrencyError('Please enter an exchange rate before switching to ₪');
-      return;
-    }
-    setCurrencyError('');
-    setCurrency(newCurrency);
-    localStorage.setItem(getUserKey('currency'), newCurrency);
+  // Format currency value in BOTH USD and ILS for display
+  const formatCurrencyBoth = (value) => {
+    const usd = formatCurrency(value);
+    const rate = ilsExchangeRate > 0 ? ilsExchangeRate : 3.4;
+    const ilsValue = value * rate;
+    const ils = `₪${Number(ilsValue).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    return `${usd} | ${ils}`;
   };
 
-  // Handle exchange rate change
-  const handleExchangeRateChange = (value) => {
+  // Handle exchange rate changes
+  const handleIlsExchangeRateChange = (value) => {
     const rate = parseFloat(value) || 0;
-    setExchangeRate(rate);
-    localStorage.setItem(getUserKey('exchangeRate'), rate.toString());
-    if (rate > 0 && currencyError) {
-      setCurrencyError('');
+    setIlsExchangeRate(rate);
+    localStorage.setItem(getUserKey('ilsExchangeRate'), rate.toString());
+  };
+
+  const handleGbpExchangeRateChange = (value) => {
+    const rate = parseFloat(value) || 0;
+    setGbpExchangeRate(rate);
+    localStorage.setItem(getUserKey('gbpExchangeRate'), rate.toString());
+  };
+
+  const handleFetchRates = async () => {
+    setIsFetchingRates(true);
+    try {
+      const res = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
+      const data = await res.json();
+      if (data && data.rates) {
+        if (data.rates.ILS) {
+          handleIlsExchangeRateChange(data.rates.ILS.toFixed(4));
+        }
+        if (data.rates.GBP) {
+          // The API base is USD (1 USD = X GBP). So 1 GBP = 1/X USD.
+          const gbpToUsd = 1 / data.rates.GBP;
+          handleGbpExchangeRateChange(gbpToUsd.toFixed(4));
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch rates', error);
+      alert('Failed to fetch live rates. Please try again later.');
+    } finally {
+      setIsFetchingRates(false);
     }
   };
 
@@ -1551,9 +1588,12 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           
           const formatUSD = (v) => {
             if (v === undefined || v === null) return 'N/A';
-            const convertedValue = convertCurrency(v);
-            const symbol = currency === 'ILS' ? '₪' : '$';
-            return `${symbol}${Math.round(convertedValue).toLocaleString('en-US')}`;
+            const usd = `$${Math.round(v).toLocaleString('en-US')}`;
+            if (ilsExchangeRate > 0) {
+              const ils = `₪${Math.round(v * ilsExchangeRate).toLocaleString('en-US')}`;
+              return `${usd} | ${ils}`;
+            }
+            return usd;
           };
 
           // Format date: show day for historical data, month/year for projected
@@ -1710,13 +1750,9 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
         min: yAxisMin,
         axisLabel: {
           formatter: (value) => {
-            const convertedValue = convertCurrency(value);
-            const symbol = currency === 'ILS' ? '₪' : '$';
-            if (convertedValue >= 1000000) {
-              return `${symbol}${(convertedValue / 1000000).toFixed(0)}M`;
-            } else {
-              return `${symbol}${(convertedValue / 1000).toFixed(0)}k`;
-            }
+            if (value >= 1000000) return `$${(value / 1000000).toFixed(0)}M`;
+            if (value >= 1000) return `$${(value / 1000).toFixed(0)}k`;
+            return `$${value}`;
           },
           fontSize: 10,
         },
@@ -1903,25 +1939,25 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
   return (
     <div className="p-6">
 
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold mb-4">Real Portfolio</h1>
-        <p className="text-gray-600 mb-4">
+      <div className="mb-8">
+        <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight mb-2">Real Portfolio</h1>
+        <p className="text-slate-500 text-base">
           Sync your actual portfolio from Google Sheets and view real performance data.
         </p>
       </div>
 
       {/* Google Sheets Sync Section */}
-      <div className="bg-white rounded-lg shadow-md p-6 mb-6">
-        <h2 className="text-lg font-semibold mb-4">Google Sheets Sync</h2>
-        <p className="text-sm text-gray-600 mb-4">
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-8 mb-8">
+        <h2 className="text-lg font-semibold text-slate-800 mb-2">Google Sheets Sync</h2>
+        <p className="text-sm text-slate-500 mb-6">
           💾 All data is automatically saved to your profile and will persist across sessions. When you return, simply click "Sync from Google Sheets" to refresh with the latest data.
         </p>
         
-        <div className="space-y-4">
+        <div className="space-y-6">
           {/* Manual Google Sheets ID Input */}
           <div className="flex items-center space-x-4">
             <div className="flex-1">
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-slate-700 mb-2">
                 Google Sheets ID
               </label>
               <input
@@ -1929,21 +1965,21 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
                 value={googleSheetsId}
                 onChange={(e) => saveGoogleSheetsId(e.target.value)}
                 placeholder="Enter your Google Sheets ID (e.g., 1ABC123DEF456...)"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="w-full px-4 py-3 border border-slate-300 bg-white text-slate-900 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
               />
               {googleSheetsId && (
-                <p className="mt-1 text-xs text-gray-500">
+                <p className="mt-2 text-xs font-medium text-emerald-600">
                   ✓ Saved to your profile
                 </p>
               )}
             </div>
           </div>
 
-          <div className="flex items-center space-x-4">
+          <div className="flex items-center space-x-4 pt-2">
             <button
               onClick={syncGoogleSheets}
               disabled={isSyncing || !googleSheetsId}
-              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+              className="px-5 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-medium rounded-lg shadow hover:from-blue-700 hover:to-indigo-700 hover:shadow-md transition-all disabled:opacity-50 disabled:shadow-none"
             >
               {isSyncing ? '🔄 Syncing...' : '🔄 Sync from Google Sheets'}
             </button>
@@ -1995,82 +2031,88 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
 
       {/* Real Portfolio Data Display */}
       {realPortfolioData && (
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold">Portfolio Overview</h2>
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-8 mb-8">
+          <div className="flex items-center justify-between mb-8">
+            <h2 className="text-xl font-bold text-slate-800">Portfolio Overview</h2>
             
-            {/* Currency Toggle */}
-            <div className="flex items-center space-x-3">
-              <label className="text-sm text-gray-700">Exchange Rate (USD to ₪):</label>
-              <input
-                type="number"
-                value={exchangeRate || ''}
-                onChange={(e) => handleExchangeRateChange(e.target.value)}
-                placeholder="e.g., 3.5"
-                step="0.01"
-                min="0"
-                className="w-24 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+            {/* Exchange Rates */}
+            <div className="flex items-center space-x-6 bg-slate-50 p-3 rounded-lg border border-slate-200">
               <div className="flex items-center space-x-2">
-                <span className={`text-sm font-medium ${currency === 'USD' ? 'text-blue-600' : 'text-gray-400'}`}>$</span>
+                <label className="text-sm font-medium text-slate-600">USD/ILS Rate:</label>
+                <input
+                  type="number"
+                  value={ilsExchangeRate || ''}
+                  onChange={(e) => handleIlsExchangeRateChange(e.target.value)}
+                  placeholder="e.g., 3.5"
+                  step="0.01"
+                  min="0"
+                  className="w-20 px-2 py-1.5 border border-slate-300 bg-white text-slate-800 rounded font-mono text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div className="flex items-center space-x-2 border-l border-slate-300 pl-6">
+                <label className="text-sm font-medium text-slate-600">GBP/USD Rate:</label>
+                <input
+                  type="number"
+                  value={gbpExchangeRate || ''}
+                  onChange={(e) => handleGbpExchangeRateChange(e.target.value)}
+                  placeholder="e.g., 1.27"
+                  step="0.01"
+                  min="0"
+                  className="w-20 px-2 py-1.5 border border-slate-300 bg-white text-slate-800 rounded font-mono text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div className="border-l border-slate-300 pl-4 flex items-center">
                 <button
                   type="button"
-                  onClick={() => {
-                    const newCurrency = currency === 'USD' ? 'ILS' : 'USD';
-                    handleCurrencyToggle(newCurrency);
-                  }}
-                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
-                    currency === 'ILS' ? 'bg-blue-600' : 'bg-gray-300'
-                  }`}
+                  onClick={handleFetchRates}
+                  disabled={isFetchingRates}
+                  className="px-3 py-1.5 bg-blue-100 text-blue-700 hover:bg-blue-200 text-sm font-medium rounded shadow-sm transition-colors disabled:opacity-50 flex items-center space-x-1"
                 >
-                  <span
-                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                      currency === 'ILS' ? 'translate-x-6' : 'translate-x-1'
-                    }`}
-                  />
+                  <svg className={`w-4 h-4 ${isFetchingRates ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                  </svg>
+                  <span>{isFetchingRates ? 'Fetching...' : 'Auto-Fetch Live'}</span>
                 </button>
-                <span className={`text-sm font-medium ${currency === 'ILS' ? 'text-blue-600' : 'text-gray-400'}`}>₪</span>
               </div>
             </div>
           </div>
           
-          {currencyError && (
-            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-600">
-              {currencyError}
-            </div>
-          )}
-          
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-            <div className="bg-blue-50 p-4 rounded text-center">
-              <div className="text-sm text-blue-600">Total Value ({currency === 'ILS' ? '₪' : 'USD'})</div>
-              <div className="text-2xl font-bold">
-                {formatCurrency(realPortfolioData.totalValue)}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-2">
+            <div className="bg-white border text-center border-slate-200 p-6 rounded-xl shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group">
+              <div className="absolute top-0 left-0 w-full h-1 bg-blue-500"></div>
+              <div className="text-sm font-medium text-slate-500 mb-2">Total Value (USD | ILS)</div>
+              <div className="text-2xl font-extrabold text-slate-900 tracking-tight group-hover:text-blue-600 transition-colors">
+                {formatCurrencyBoth(realPortfolioData.totalValue)}
               </div>
             </div>
-            <div className="bg-green-50 p-4 rounded text-center">
-              <div className="text-sm text-green-600">Assets</div>
-              <div className="text-2xl font-bold">{realPortfolioData.assets.length}</div>
+            <div className="bg-white border text-center border-slate-200 p-6 rounded-xl shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group">
+              <div className="absolute top-0 left-0 w-full h-1 bg-green-500"></div>
+              <div className="text-sm font-medium text-slate-500 mb-2">Assets</div>
+              <div className="text-3xl font-extrabold text-slate-900 tracking-tight group-hover:text-green-600 transition-colors">
+                {realPortfolioData.assets.length}
+              </div>
             </div>
-            <div className="bg-purple-50 p-4 rounded text-center">
-              <div className="text-sm text-purple-600">Last Sync</div>
-              <div className="text-sm font-medium">
+            <div className="bg-white border text-center border-slate-200 p-6 rounded-xl shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group">
+              <div className="absolute top-0 left-0 w-full h-1 bg-purple-500"></div>
+              <div className="text-sm font-medium text-slate-500 mb-2">Last Sync</div>
+              <div className="text-lg font-bold text-slate-700 mt-2">
                 {new Date(realPortfolioData.lastSync).toLocaleString()}
               </div>
+            </div>
           </div>
-        </div>
 
         {/* Combined Simulation Section */}
         {realPortfolioData && (
           <div className="mb-8">
-            <div className="bg-white rounded-lg shadow-md p-6">
-              <h2 className="text-lg font-semibold mb-4">Combined Portfolio Simulation</h2>
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-8">
+              <h2 className="text-xl font-bold text-slate-800 mb-6">Combined Portfolio Simulation</h2>
               
               {/* Asset Selection */}
-              <div className="mb-4">
-                <h3 className="text-sm font-medium text-gray-700 mb-3">Select Assets for Simulation:</h3>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="mb-6 p-6 bg-slate-50 border border-slate-200 rounded-xl">
+                <h3 className="text-sm font-bold text-slate-700 mb-4 uppercase tracking-wider">Select Assets for Simulation</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                   {realPortfolioData.assets.map((asset, index) => (
-                    <label key={index} className="flex items-center space-x-2 cursor-pointer">
+                    <label key={index} className="flex items-center space-x-3 p-3 bg-white border border-slate-200 rounded-lg cursor-pointer hover:border-blue-400 hover:shadow-sm transition-all group">
                       <input
                         type="checkbox"
                         checked={selectedAssets[asset.symbol] || false}
@@ -2080,34 +2122,38 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
                           updateSelectedAssets(newSelected);
                           // useEffect will automatically update combined simulation
                         }}
-                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                       />
-                      <span className="text-sm text-gray-700 flex items-center space-x-2">
-                        <span>{asset.symbol} ({formatCurrency(asset.currentValue)} - {cagrTypes[asset.symbol] || '5Y'})</span>
+                      <div className="flex flex-col text-sm">
+                        <span className="font-semibold text-slate-800 group-hover:text-blue-700 transition-colors">{asset.symbol}</span>
+                        <span className="text-xs text-slate-500">{formatAssetCurrency(asset.currentValue, asset.currency)} • {cagrTypes[asset.symbol] || '5Y'}</span>
                         {reSimulatingAssets.has(asset.symbol) && (
-                          <span className="text-xs text-blue-600 flex items-center">
+                          <span className="text-xs text-blue-600 flex items-center mt-1 font-medium">
                             <svg className="animate-spin h-3 w-3 mr-1" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                             </svg>
-                            Simulating...
+                            Simulating
                           </span>
                         )}
-                      </span>
+                      </div>
                     </label>
                   ))}
                 </div>
               </div>
 
               {/* Selected Value Display */}
-              <div className="mb-4">
-                <div className="text-sm text-gray-600">
-                  Total Selected Value: {formatCurrency(Object.keys(selectedAssets)
+              <div className="mb-6 flex justify-end">
+                <div className="text-sm font-medium text-slate-700 bg-slate-100 px-4 py-2 rounded-lg inline-flex items-center space-x-2 border border-slate-200">
+                  <span>Selected Value:</span>
+                  <span className="text-blue-700 font-bold text-lg">
+                    {formatCurrency(Object.keys(selectedAssets)
                     .filter(symbol => selectedAssets[symbol])
                     .reduce((sum, symbol) => {
                       const asset = realPortfolioData.assets.find(a => a.symbol === symbol);
                       return sum + (asset?.currentValue || 0);
                     }, 0))}
+                  </span>
                 </div>
               </div>
 
@@ -2151,7 +2197,7 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
                     <div className="flex items-center space-x-4">
                       <div className="text-lg font-semibold text-gray-900">{asset.symbol}</div>
                       <span className="px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-800">
-                        {formatCurrency(asset.currentPrice || 0)}
+                        {formatAssetCurrency(asset.currentPrice || 0, asset.currency)}
                       </span>
                       <div className="text-sm text-gray-600">
                         Total Shares: {asset.totalShares.toLocaleString()}
@@ -2198,7 +2244,7 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
                       <div>
                         <div className="text-sm text-gray-500">Simulation Deposit</div>
                         <div className="text-sm font-medium text-green-600">
-                          ${asset.currentValue.toLocaleString()}
+                          {formatCurrency(asset.currentValue)}
                         </div>
                       </div>
                     </div>
@@ -2283,13 +2329,16 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
                       </thead>
                       <tbody className="bg-white divide-y divide-gray-200">
                         {asset.purchases.map((purchase, pIndex) => {
-                          // Calculate percentage change and dollar yield using actual current price from price history
-                          const currentPrice = asset.currentPrice || 0; // This should be the last price from 10Y data
-                          
+                          // Calculate percentage change and dollar yield using actual current price in USD
+                          // Fallback dynamically from native price if currentPriceUSD doesn't exist on cached data
+                          const currentPriceNative = asset.currentPrice || 0;
+                          const currentPriceUSD = asset.currentPriceUSD !== undefined 
+                            ? asset.currentPriceUSD 
+                            : (currentPriceNative * getUsdRate(asset.currency));
                           // Calculate performance metrics
                           
-                          const priceChange = ((currentPrice - purchase.priceUSD) / purchase.priceUSD) * 100;
-                          const dollarYield = (currentPrice - purchase.priceUSD) * purchase.shares;
+                          const priceChange = purchase.priceUSD > 0 ? ((currentPriceUSD - purchase.priceUSD) / purchase.priceUSD) * 100 : 0;
+                          const dollarYield = (currentPriceUSD - purchase.priceUSD) * purchase.shares;
                           const isPositive = priceChange >= 0;
                           
                           return (
