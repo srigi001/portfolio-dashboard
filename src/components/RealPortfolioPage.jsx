@@ -5,6 +5,7 @@ import dayjs from 'dayjs';
 import { fetchPortfolioData } from '../utils/googleSheets';
 import { fetchAssetData, fetch10YPriceHistoryWithDates } from '../utils/calcMetrics';
 import { supabase } from '../utils/supabaseClient';
+import { simulatePortfolio } from '../utils/simulation';
 
 // Helper function to get current date normalized to first of month (YYYY-MM-01)
 const getCurrentMonthStart = () => {
@@ -336,7 +337,7 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     // Load from user-specific localStorage (persists across sessions)
     return localStorage.getItem(getUserKey('googleSheetsId')) || '';
   });
-  const GOOGLE_SHEETS_RANGE = 'Universal!H:M';
+  const GOOGLE_SHEETS_RANGE = 'Universal!G:N';
 
   // Load deposits from Supabase (defined early for use in useEffect)
   const loadDepositsFromSupabase = async () => {
@@ -797,24 +798,11 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           years: payload.years
         });
         
-        const res = await fetch(
-          'https://investment-dashboard-backend-gm79.onrender.com/api/simulate',
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          }
-        );
-        
-        if (res.ok) {
-          const result = await res.json();
-          allSimulations[asset.symbol] = result;
-          console.log(`✅ Auto-simulation completed for ${asset.symbol}`);
-        } else {
-          console.warn(`⚠️ Auto-simulation failed for ${asset.symbol}`);
-        }
+        const result = simulatePortfolio(payload);
+        allSimulations[asset.symbol] = result;
+        console.log(`✅ Local simulation completed for ${asset.symbol}`);
       } catch (error) {
-        console.warn(`⚠️ Auto-simulation error for ${asset.symbol}:`, error);
+        console.warn(`⚠️ Local simulation error for ${asset.symbol}:`, error);
       }
     }
     
@@ -1001,56 +989,23 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
       };
 
       console.log(`📊 Re-simulation payload for ${asset.symbol} (${cagrType}):`, payload);
-      console.log(`💰 One-time deposits breakdown:`, {
-        initialDeposit: { date: getCurrentMonthStart(), amount: asset.currentValue },
-        userDeposit: oneTimeDepositToUse,
-        normalizedUserDeposit: oneTimeDepositToUse && oneTimeDepositToUse.date && oneTimeDepositToUse.amount > 0 ? {
-          originalDate: oneTimeDepositToUse.date,
-          normalizedDate: oneTimeDepositsArray.find(d => d.date !== getCurrentMonthStart())?.date,
-          amount: oneTimeDepositToUse.amount
-        } : null,
-        totalDeposits: oneTimeDepositsArray.length,
-        allDeposits: oneTimeDepositsArray,
-        totalAmount: oneTimeDepositsArray.reduce((sum, d) => sum + d.amount, 0)
-      });
-
-      const res = await fetch(
-        'https://investment-dashboard-backend-gm79.onrender.com/api/simulate',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        }
-      );
       
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Simulation failed');
-      }
+      const result = simulatePortfolio(payload);
       
-      const result = await res.json();
-      console.log(`✅ Re-simulation completed for ${asset.symbol}:`, result);
-      
-      // Update allAssetSimulations so the combined simulation reflects the change
-      // Use functional update to ensure we have the latest state
+      // Update both cached simulations
       setAllAssetSimulations(prev => {
-        const updated = {
-          ...prev,
-          [asset.symbol]: result
-        };
+        const updated = { ...prev, [asset.symbol]: result };
         saveToLocalStorage('allAssetSimulations', updated);
         return updated;
       });
       
-      // Also update assetSimulations for consistency
       setAssetSimulations(prev => {
-        const updated = {
-          ...prev,
-          [asset.symbol]: result
-        };
+        const updated = { ...prev, [asset.symbol]: result };
         saveToLocalStorage('assetSimulations', updated);
         return updated;
       });
+      
+      console.log(`✅ Local re-simulation completed for ${asset.symbol}`);
       
     } catch (error) {
       console.error(`❌ Re-simulation error for ${asset.symbol}:`, error);
@@ -1141,30 +1096,9 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
       };
 
       console.log(`📊 Simulation payload for ${asset.symbol} (${cagrType}):`, payload);
-      console.log(`💰 Deposit value: $${asset.currentValue.toFixed(2)}`);
-      console.log(`🔍 Debug - Asset values for ${asset.symbol}:`, {
-        currentPrice: asset.currentPrice,
-        totalShares: asset.totalShares,
-        currentValue: asset.currentValue,
-        totalInvested: asset.totalInvested
-      });
-
-      const res = await fetch(
-        'https://investment-dashboard-backend-gm79.onrender.com/api/simulate',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        }
-      );
       
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Simulation failed');
-      }
-      
-      const result = await res.json();
-      console.log(`✅ Simulation result for ${asset.symbol}:`, result);
+      const result = simulatePortfolio(payload);
+      console.log(`✅ Local simulation result for ${asset.symbol}:`, result);
       
       updateAssetSimulations({
         ...assetSimulations,
@@ -1235,19 +1169,19 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
               ${titleParts.join(', ')} (${date.format('MMM YYYY')})
             </div>
             <div style="margin-bottom: 4px;">
-              <span style="color: rgba(${baseColor}, 0.50);">●</span> 90th Percentile: ${formatUSD(percentile90[idx])}
+              <span style="color: rgba(${baseColor}, 0.20);">●</span> 90th Percentile: ${formatUSD(percentile90[idx])}
             </div>
             <div style="margin-bottom: 4px;">
-              <span style="color: rgba(${baseColor}, 0.75);">●</span> 70th Percentile: ${formatUSD(percentile70[idx])}
+              <span style="color: rgba(${baseColor}, 0.40);">●</span> 70th Percentile: ${formatUSD(percentile70[idx])}
             </div>
             <div style="margin-bottom: 4px;">
-              <span style="color: rgba(${baseColor}, 1);">●</span> Median: ${formatUSD(median[idx])}
+              <span style="color: rgba(${baseColor}, 0.60);">●</span> Median: ${formatUSD(median[idx])}
             </div>
             <div style="margin-bottom: 4px;">
-              <span style="color: rgba(${baseColor}, 0.75);">●</span> 30th Percentile: ${formatUSD(percentile30[idx])}
+              <span style="color: rgba(${baseColor}, 0.80);">●</span> 30th Percentile: ${formatUSD(percentile30[idx])}
             </div>
             <div style="margin-bottom: 4px;">
-              <span style="color: rgba(${baseColor}, 0.50);">●</span> 10th Percentile: ${formatUSD(percentile10[idx])}
+              <span style="color: rgba(${baseColor}, 1);">●</span> 10th Percentile: ${formatUSD(percentile10[idx])}
             </div>
           `;
         },
@@ -1281,7 +1215,7 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           data: percentile90,
           type: 'line',
           showSymbol: false,
-          lineStyle: { color: `rgba(${baseColor}, 0.50)`, width: 1 },
+          lineStyle: { color: `rgba(${baseColor}, 0.20)`, width: 1 },
           areaStyle: { opacity: 0 }, // transparent — visual band is formed by stacking
         },
         {
@@ -1289,7 +1223,7 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           data: percentile70,
           type: 'line',
           showSymbol: false,
-          lineStyle: { color: `rgba(${baseColor}, 0.75)`, width: 1 },
+          lineStyle: { color: `rgba(${baseColor}, 0.40)`, width: 1 },
           areaStyle: { opacity: 0 },
         },
         {
@@ -1297,14 +1231,14 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           data: median,
           type: 'line',
           showSymbol: false,
-          lineStyle: { color: `rgba(${baseColor}, 1)`, width: 2 },
+          lineStyle: { color: `rgba(${baseColor}, 0.60)`, width: 1 },
         },
         {
           name: '30th Percentile',
           data: percentile30,
           type: 'line',
           showSymbol: false,
-          lineStyle: { color: `rgba(${baseColor}, 0.75)`, width: 1 },
+          lineStyle: { color: `rgba(${baseColor}, 0.80)`, width: 1.5 },
           areaStyle: { opacity: 0 },
         },
         {
@@ -1312,7 +1246,7 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           data: percentile10,
           type: 'line',
           showSymbol: false,
-          lineStyle: { color: `rgba(${baseColor}, 0.50)`, width: 1 },
+          lineStyle: { color: `rgba(${baseColor}, 1)`, width: 2 },
         },
       ],
     };
@@ -1702,19 +1636,19 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           if (medianArray[idx] !== null) {
             tooltipContent += `
               <div style="margin-bottom: 4px;">
-                <span style="color: rgba(${baseColor}, 0.50);">●</span> 90th Percentile: ${formatUSD(percentile90Array[idx])}
+                <span style="color: rgba(${baseColor}, 0.20);">●</span> 90th Percentile: ${formatUSD(percentile90Array[idx])}
               </div>
               <div style="margin-bottom: 4px;">
-                <span style="color: rgba(${baseColor}, 0.75);">●</span> 70th Percentile: ${formatUSD(percentile70Array[idx])}
+                <span style="color: rgba(${baseColor}, 0.40);">●</span> 70th Percentile: ${formatUSD(percentile70Array[idx])}
               </div>
               <div style="margin-bottom: 4px;">
-                <span style="color: rgba(${baseColor}, 1);">●</span> Median: ${formatUSD(medianArray[idx])}
+                <span style="color: rgba(${baseColor}, 0.60);">●</span> Median: ${formatUSD(medianArray[idx])}
               </div>
               <div style="margin-bottom: 4px;">
-                <span style="color: rgba(${baseColor}, 0.75);">●</span> 30th Percentile: ${formatUSD(percentile30Array[idx])}
+                <span style="color: rgba(${baseColor}, 0.80);">●</span> 30th Percentile: ${formatUSD(percentile30Array[idx])}
               </div>
               <div style="margin-bottom: 4px;">
-                <span style="color: rgba(${baseColor}, 0.50);">●</span> 10th Percentile: ${formatUSD(percentile10Array[idx])}
+                <span style="color: rgba(${baseColor}, 1);">●</span> 10th Percentile: ${formatUSD(percentile10Array[idx])}
               </div>
             `;
           }
@@ -1858,8 +1792,8 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           type: 'line',
           smooth: true,
           showSymbol: false,
-          lineStyle: { color: `rgba(${baseColor}, 0.50)`, width: 1 },
-          itemStyle: { color: `rgba(${baseColor}, 0.50)` },
+          lineStyle: { color: `rgba(${baseColor}, 0.20)`, width: 1 },
+          itemStyle: { color: `rgba(${baseColor}, 0.20)` },
           areaStyle: { opacity: 0 },
         },
         {
@@ -1868,8 +1802,8 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           type: 'line',
           smooth: true,
           showSymbol: false,
-          lineStyle: { color: `rgba(${baseColor}, 0.75)`, width: 1 },
-          itemStyle: { color: `rgba(${baseColor}, 0.75)` },
+          lineStyle: { color: `rgba(${baseColor}, 0.40)`, width: 1 },
+          itemStyle: { color: `rgba(${baseColor}, 0.40)` },
           areaStyle: { opacity: 0 },
         },
         {
@@ -1878,8 +1812,8 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           type: 'line',
           smooth: true,
           showSymbol: false,
-          lineStyle: { color: `rgba(${baseColor}, 1)`, width: 3 },
-          itemStyle: { color: `rgba(${baseColor}, 1)` },
+          lineStyle: { color: `rgba(${baseColor}, 0.60)`, width: 1 },
+          itemStyle: { color: `rgba(${baseColor}, 0.60)` },
         },
         {
           name: '30th Percentile',
@@ -1887,8 +1821,8 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           type: 'line',
           smooth: true,
           showSymbol: false,
-          lineStyle: { color: `rgba(${baseColor}, 0.75)`, width: 1 },
-          itemStyle: { color: `rgba(${baseColor}, 0.75)` },
+          lineStyle: { color: `rgba(${baseColor}, 0.80)`, width: 1.5 },
+          itemStyle: { color: `rgba(${baseColor}, 0.80)` },
           areaStyle: { opacity: 0 },
         },
         {
@@ -1897,8 +1831,8 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           type: 'line',
           smooth: true,
           showSymbol: false,
-          lineStyle: { color: `rgba(${baseColor}, 0.50)`, width: 1 },
-          itemStyle: { color: `rgba(${baseColor}, 0.50)` },
+          lineStyle: { color: `rgba(${baseColor}, 1)`, width: 2 },
+          itemStyle: { color: `rgba(${baseColor}, 1)` },
         },
       ],
     };
@@ -2322,6 +2256,9 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
                       <div className="text-sm text-gray-600">
                         Total Invested: {formatCurrency(asset.totalInvested)}
                       </div>
+                      <div className={`text-sm font-medium ${(asset.currentValue - asset.totalInvested) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        Total Yield: {formatCurrency(asset.currentValue - asset.totalInvested)}
+                      </div>
                     </div>
                     <div className="flex items-center space-x-4">
                       <div>
@@ -2438,6 +2375,7 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
                       <thead className="bg-gray-50">
                         <tr>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Portfolio</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Shares</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Purchase Price $</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">% Change</th>
@@ -2461,6 +2399,7 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
                           return (
                             <tr key={pIndex}>
                               <td className="px-3 py-2 text-sm text-gray-900">{purchase.date}</td>
+                              <td className="px-3 py-2 text-sm text-gray-500 font-medium">{purchase.portfolio}</td>
                               <td className="px-3 py-2 text-sm text-gray-500">{purchase.shares.toLocaleString()}</td>
                               <td className="px-3 py-2 text-sm text-gray-500">{formatCurrency(purchase.priceUSD)}</td>
                               <td className={`px-3 py-2 text-sm font-medium ${isPositive ? 'text-green-600' : 'text-red-600'}`}>

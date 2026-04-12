@@ -44,42 +44,68 @@ export function parsePortfolioData(rows, customRates = {}) {
   console.log('🔍 Parsing portfolio data from rows:', rows.length);
   console.log('🔍 Raw rows data:', rows);
   
-  if (!rows || rows.length < 2) {
-    throw new Error('Spreadsheet must have at least a header row and one data row');
+  const dataRowsRaw = rows || [];
+  if (dataRowsRaw.length < 1) {
+    throw new Error('Spreadsheet data is empty');
   }
 
-  const headers = rows[0];
-  const dataRows = rows.slice(1);
+  // 1. Find the header row (search first 10 rows for keywords)
+  let headerRowIndex = -1;
+  let headers = [];
   
-  console.log('📋 Headers found:', headers);
-  console.log('📋 Header indices:', headers.map((h, i) => `${i}: "${h}"`));
-  console.log('📊 Data rows count:', dataRows.length);
+  for (let i = 0; i < Math.min(dataRowsRaw.length, 10); i++) {
+    const row = dataRowsRaw[i];
+    const rowStr = row.join(' ').toLowerCase();
+    // A header row should contain at least two of these key terms
+    const hasAsset = rowStr.includes('asset') || rowStr.includes('symbol');
+    const hasDate = rowStr.includes('date');
+    const hasShares = rowStr.includes('shares');
+    const hasPrice = rowStr.includes('price');
+    const hasPortfolio = rowStr.includes('portfolio') || rowStr.includes('account');
+    
+    const score = (hasAsset ? 1 : 0) + (hasDate ? 1 : 0) + (hasShares ? 1 : 0) + (hasPrice ? 1 : 0) + (hasPortfolio ? 1 : 0);
+    
+    if (score >= 2) {
+      headerRowIndex = i;
+      headers = row;
+      console.log(`✅ Detected header row at index ${i} with score ${score}:`, headers);
+      break;
+    }
+  }
 
-  // Find column indices - based on H:M range: Portfolio, Asset, Purchase Date, # of Shares, Currency, Purchase Price Raw
-  const symbolIndex = headers.findIndex(h => h.toLowerCase().includes('asset'));
-  const dateIndex = headers.findIndex(h => h.toLowerCase().includes('purchase date'));
-  const sharesIndex = headers.findIndex(h => h.toLowerCase().includes('# of shares'));
-  const priceIndex = headers.findIndex(h => h.toLowerCase().includes('purchase price raw'));
+  if (headerRowIndex === -1) {
+    console.warn('⚠️ Could not detect header row with keywords, falling back to row 0');
+    headerRowIndex = 0;
+    headers = dataRowsRaw[0];
+  }
+
+  const dataRows = dataRowsRaw.slice(headerRowIndex + 1);
+  
+  console.log('📋 Headers processed:', headers.map((h, i) => `${i}: "${h}"`));
+
+  // Find column indices
+  const portfolioIndex = headers.findIndex(h => {
+    const val = h.toLowerCase();
+    return val.includes('portfolio') || val.includes('account') || val.includes('pension') || val.includes('gemel');
+  });
+  const symbolIndex = headers.findIndex(h => h.toLowerCase().includes('asset') || h.toLowerCase().includes('symbol'));
+  const dateIndex = headers.findIndex(h => h.toLowerCase().includes('purchase date') || h.toLowerCase().includes('date'));
+  const sharesIndex = headers.findIndex(h => h.toLowerCase().includes('# of shares') || h.toLowerCase().includes('shares') || h.toLowerCase().includes('qty'));
+  const priceIndex = headers.findIndex(h => h.toLowerCase().includes('purchase price raw') || h.toLowerCase().includes('price'));
   const currencyIndex = headers.findIndex(h => h.toLowerCase().includes('currency'));
   const currentValueIndex = headers.findIndex(h => h.toLowerCase().includes('current value'));
   const purchaseValueIndex = headers.findIndex(h => h.toLowerCase().includes('purchase value'));
 
   console.log('🔍 Column indices found:');
-  console.log('  Symbol:', symbolIndex, `"${headers[symbolIndex]}"`);
-  console.log('  Date:', dateIndex, `"${headers[dateIndex]}"`);
-  console.log('  Shares:', sharesIndex, `"${headers[sharesIndex]}"`);
-  console.log('  Price:', priceIndex, `"${headers[priceIndex]}"`);
-  console.log('  Currency:', currencyIndex, `"${headers[currencyIndex]}"`);
-  
-  // Debug: Show all headers with their indices
-  console.log('🔍 All columns available:');
-  headers.forEach((header, index) => {
-    console.log(`  ${index}: "${header}"`);
-  });
+  console.log('  Portfolio:', portfolioIndex !== -1 ? `${portfolioIndex} ("${headers[portfolioIndex]}")` : 'NOT FOUND');
+  console.log('  Symbol (Asset):', symbolIndex !== -1 ? `${symbolIndex} ("${headers[symbolIndex]}")` : 'NOT FOUND');
+  console.log('  Date:', dateIndex !== -1 ? `${dateIndex} ("${headers[dateIndex]}")` : 'NOT FOUND');
+  console.log('  Shares:', sharesIndex !== -1 ? `${sharesIndex} ("${headers[sharesIndex]}")` : 'NOT FOUND');
+  console.log('  Price:', priceIndex !== -1 ? `${priceIndex} ("${headers[priceIndex]}")` : 'NOT FOUND');
 
   if (symbolIndex === -1 || dateIndex === -1 || sharesIndex === -1 || priceIndex === -1) {
-    console.log('🔍 Available headers:', headers);
-    throw new Error('Required columns not found. Expected: Asset/Symbol, Date, Shares/Quantity, Price');
+    console.error('❌ Missing columns in headers:', headers);
+    throw new Error('Required columns (Asset, Date, Shares, Price) not found. Check your spreadsheet headers.');
   }
 
   // Currency conversion rates (simplified - no CAD)
@@ -141,9 +167,12 @@ export function parsePortfolioData(rows, customRates = {}) {
       
       console.log(`💰 ${symbol}: ${price} ${currency} → $${priceUSD.toFixed(2)} USD (rate: ${usdRate})`);
       
+      const portfolio = portfolioIndex !== -1 ? (row[portfolioIndex]?.trim() || 'Default') : 'Default';
+      
       const purchase = {
         date,
         shares,
+        portfolio,
         priceUSD: priceUSD, // Price in USD
         priceOriginal: price, // Original price in original currency
         currency: currency,
