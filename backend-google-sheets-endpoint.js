@@ -165,12 +165,16 @@ app.post('/api/simulate', (req, res) => {
       const mean = monthValues.reduce((sum, v) => sum + v, 0) / monthValues.length;
       const median = monthValues[Math.floor(monthValues.length / 2)];
       const p10 = monthValues[Math.floor(monthValues.length * 0.1)];
+      const p30 = monthValues[Math.floor(monthValues.length * 0.3)];
+      const p70 = monthValues[Math.floor(monthValues.length * 0.7)];
       const p90 = monthValues[Math.floor(monthValues.length * 0.9)];
       aggregated.push({
         month,
         mean: isNaN(mean) ? 0 : mean,
         median: isNaN(median) ? 0 : median,
         p10: isNaN(p10) ? 0 : p10,
+        p30: isNaN(p30) ? 0 : p30,
+        p70: isNaN(p70) ? 0 : p70,
         p90: isNaN(p90) ? 0 : p90,
       });
     }
@@ -181,6 +185,8 @@ app.post('/api/simulate', (req, res) => {
       mean: aggregated.map((r) => Math.round(r.mean)),
       median: aggregated.map((r) => Math.round(r.median)),
       percentile10: aggregated.map((r) => Math.round(r.p10)),
+      percentile30: aggregated.map((r) => Math.round(r.p30)),
+      percentile70: aggregated.map((r) => Math.round(r.p70)),
       percentile90: aggregated.map((r) => Math.round(r.p90)),
     };
 

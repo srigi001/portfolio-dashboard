@@ -872,6 +872,8 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
       mean: [],
       median: [],
       percentile10: [],
+      percentile30: [],
+      percentile70: [],
       percentile90: []
     };
     
@@ -880,18 +882,24 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
       let sumMean = 0;
       let sumMedian = 0;
       let sumP10 = 0;
+      let sumP30 = 0;
+      let sumP70 = 0;
       let sumP90 = 0;
       
       selectedSimulations.forEach(sim => {
         sumMean += sim.mean[i] || 0;
         sumMedian += sim.median[i] || 0;
         sumP10 += sim.percentile10[i] || 0;
+        sumP30 += (sim.percentile30 ? sim.percentile30[i] : sim.median[i]) || 0;
+        sumP70 += (sim.percentile70 ? sim.percentile70[i] : sim.median[i]) || 0;
         sumP90 += sim.percentile90[i] || 0;
       });
       
       combinedResult.mean.push(Math.round(sumMean));
       combinedResult.median.push(Math.round(sumMedian));
       combinedResult.percentile10.push(Math.round(sumP10));
+      combinedResult.percentile30.push(Math.round(sumP30));
+      combinedResult.percentile70.push(Math.round(sumP70));
       combinedResult.percentile90.push(Math.round(sumP90));
     }
     
@@ -1178,12 +1186,17 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     if (!simulationResult) return {};
 
     const { months, median, percentile10, percentile90 } = simulationResult;
+    const percentile30 = simulationResult.percentile30 || median;
+    const percentile70 = simulationResult.percentile70 || median;
     const cagrType = cagrTypes[asset.symbol] || '5Y';
     
     // Calculate the minimum value across all data points to set Y-axis start
     const allValues = [...median, ...percentile10, ...percentile90];
     const minValue = Math.min(...allValues);
     const yAxisMin = Math.max(0, minValue * 0.95); // Start at 95% of minimum value
+
+    // Unified blue color with varying alpha
+    const baseColor = '59, 130, 246'; // #3b82f6 in RGB
 
     return {
       title: {
@@ -1222,13 +1235,19 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
               ${titleParts.join(', ')} (${date.format('MMM YYYY')})
             </div>
             <div style="margin-bottom: 4px;">
-              <span style="color: #10b981;">●</span> Median: ${formatUSD(median[idx])}
+              <span style="color: rgba(${baseColor}, 0.50);">●</span> 90th Percentile: ${formatUSD(percentile90[idx])}
             </div>
             <div style="margin-bottom: 4px;">
-              <span style="color: #3b82f6;">●</span> 10th Percentile: ${formatUSD(percentile10[idx])}
+              <span style="color: rgba(${baseColor}, 0.75);">●</span> 70th Percentile: ${formatUSD(percentile70[idx])}
             </div>
             <div style="margin-bottom: 4px;">
-              <span style="color: #ef4444;">●</span> 90th Percentile: ${formatUSD(percentile90[idx])}
+              <span style="color: rgba(${baseColor}, 1);">●</span> Median: ${formatUSD(median[idx])}
+            </div>
+            <div style="margin-bottom: 4px;">
+              <span style="color: rgba(${baseColor}, 0.75);">●</span> 30th Percentile: ${formatUSD(percentile30[idx])}
+            </div>
+            <div style="margin-bottom: 4px;">
+              <span style="color: rgba(${baseColor}, 0.50);">●</span> 10th Percentile: ${formatUSD(percentile10[idx])}
             </div>
           `;
         },
@@ -1258,25 +1277,42 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
       },
       series: [
         {
-          name: '10th Percentile',
-          data: percentile10,
+          name: '90th Percentile',
+          data: percentile90,
           type: 'line',
           showSymbol: false,
-          lineStyle: { color: '#3b82f6' },
+          lineStyle: { color: `rgba(${baseColor}, 0.50)`, width: 1 },
+          areaStyle: { opacity: 0 }, // transparent — visual band is formed by stacking
+        },
+        {
+          name: '70th Percentile',
+          data: percentile70,
+          type: 'line',
+          showSymbol: false,
+          lineStyle: { color: `rgba(${baseColor}, 0.75)`, width: 1 },
+          areaStyle: { opacity: 0 },
         },
         {
           name: 'Median',
           data: median,
           type: 'line',
           showSymbol: false,
-          lineStyle: { color: '#10b981', width: 2 },
+          lineStyle: { color: `rgba(${baseColor}, 1)`, width: 2 },
         },
         {
-          name: '90th Percentile',
-          data: percentile90,
+          name: '30th Percentile',
+          data: percentile30,
           type: 'line',
           showSymbol: false,
-          lineStyle: { color: '#ef4444' },
+          lineStyle: { color: `rgba(${baseColor}, 0.75)`, width: 1 },
+          areaStyle: { opacity: 0 },
+        },
+        {
+          name: '10th Percentile',
+          data: percentile10,
+          type: 'line',
+          showSymbol: false,
+          lineStyle: { color: `rgba(${baseColor}, 0.50)`, width: 1 },
         },
       ],
     };
@@ -1483,6 +1519,8 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     const months = combinedSimulation.months;
     const median = combinedSimulation.median;
     const percentile10 = combinedSimulation.percentile10;
+    const percentile30 = combinedSimulation.percentile30 || median;
+    const percentile70 = combinedSimulation.percentile70 || median;
     const percentile90 = combinedSimulation.percentile90;
     
     // Calculate historical portfolio value
@@ -1586,6 +1624,18 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
       const projIdx = projectedDates.indexOf(date);
       return projIdx >= 0 && (projIdx + monthOffset) < percentile10.length ? percentile10[projIdx + monthOffset] : null;
     });
+
+    const percentile30Array = allDates.map((date, idx) => {
+      if (idx < finalProjectionStartIndex) return null;
+      const projIdx = projectedDates.indexOf(date);
+      return projIdx >= 0 && (projIdx + monthOffset) < percentile30.length ? percentile30[projIdx + monthOffset] : null;
+    });
+
+    const percentile70Array = allDates.map((date, idx) => {
+      if (idx < finalProjectionStartIndex) return null;
+      const projIdx = projectedDates.indexOf(date);
+      return projIdx >= 0 && (projIdx + monthOffset) < percentile70.length ? percentile70[projIdx + monthOffset] : null;
+    });
     
     const percentile90Array = allDates.map((date, idx) => {
       if (idx < finalProjectionStartIndex) return null;
@@ -1598,6 +1648,9 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     const allValues = [...historicalValues.filter(v => v > 0), ...median.filter(v => v > 0), ...percentile10.filter(v => v > 0), ...percentile90.filter(v => v > 0)];
     const minValue = Math.min(...allValues);
     const yAxisMin = Math.max(0, minValue * 0.95);
+
+    // Unified blue color with varying alpha
+    const baseColor = '59, 130, 246'; // #3b82f6 in RGB
     
     return {
       title: {
@@ -1649,13 +1702,19 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           if (medianArray[idx] !== null) {
             tooltipContent += `
               <div style="margin-bottom: 4px;">
-                <span style="color: #3b82f6;">●</span> Median: ${formatUSD(medianArray[idx])}
+                <span style="color: rgba(${baseColor}, 0.50);">●</span> 90th Percentile: ${formatUSD(percentile90Array[idx])}
               </div>
               <div style="margin-bottom: 4px;">
-                <span style="color: #3b82f6;">●</span> 10th Percentile: ${formatUSD(percentile10Array[idx])}
+                <span style="color: rgba(${baseColor}, 0.75);">●</span> 70th Percentile: ${formatUSD(percentile70Array[idx])}
               </div>
               <div style="margin-bottom: 4px;">
-                <span style="color: #10b981;">●</span> 90th Percentile: ${formatUSD(percentile90Array[idx])}
+                <span style="color: rgba(${baseColor}, 1);">●</span> Median: ${formatUSD(medianArray[idx])}
+              </div>
+              <div style="margin-bottom: 4px;">
+                <span style="color: rgba(${baseColor}, 0.75);">●</span> 30th Percentile: ${formatUSD(percentile30Array[idx])}
+              </div>
+              <div style="margin-bottom: 4px;">
+                <span style="color: rgba(${baseColor}, 0.50);">●</span> 10th Percentile: ${formatUSD(percentile10Array[idx])}
               </div>
             `;
           }
@@ -1664,7 +1723,7 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
         },
       },
       legend: {
-        data: ['Historical Portfolio Value', '10th Percentile', 'Median', '90th Percentile'],
+        data: ['Historical Portfolio Value', '10th Percentile', '30th Percentile', 'Median', '70th Percentile', '90th Percentile'],
         top: 30,
       },
       grid: {
@@ -1794,28 +1853,52 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           itemStyle: { color: '#6366f1' },
         },
         {
-          name: '10th Percentile',
-          data: percentile10Array,
+          name: '90th Percentile',
+          data: percentile90Array,
           type: 'line',
           smooth: true,
-          lineStyle: { color: '#ef4444', width: 2 },
-          areaStyle: { opacity: 0.1, color: '#ef4444' },
+          showSymbol: false,
+          lineStyle: { color: `rgba(${baseColor}, 0.50)`, width: 1 },
+          itemStyle: { color: `rgba(${baseColor}, 0.50)` },
+          areaStyle: { opacity: 0 },
+        },
+        {
+          name: '70th Percentile',
+          data: percentile70Array,
+          type: 'line',
+          smooth: true,
+          showSymbol: false,
+          lineStyle: { color: `rgba(${baseColor}, 0.75)`, width: 1 },
+          itemStyle: { color: `rgba(${baseColor}, 0.75)` },
+          areaStyle: { opacity: 0 },
         },
         {
           name: 'Median',
           data: medianArray,
           type: 'line',
           smooth: true,
-          lineStyle: { color: '#3b82f6', width: 3 },
-          areaStyle: { opacity: 0.1, color: '#3b82f6' },
+          showSymbol: false,
+          lineStyle: { color: `rgba(${baseColor}, 1)`, width: 3 },
+          itemStyle: { color: `rgba(${baseColor}, 1)` },
         },
         {
-          name: '90th Percentile',
-          data: percentile90Array,
+          name: '30th Percentile',
+          data: percentile30Array,
           type: 'line',
           smooth: true,
-          lineStyle: { color: '#10b981', width: 2 },
-          areaStyle: { opacity: 0.1, color: '#10b981' },
+          showSymbol: false,
+          lineStyle: { color: `rgba(${baseColor}, 0.75)`, width: 1 },
+          itemStyle: { color: `rgba(${baseColor}, 0.75)` },
+          areaStyle: { opacity: 0 },
+        },
+        {
+          name: '10th Percentile',
+          data: percentile10Array,
+          type: 'line',
+          smooth: true,
+          showSymbol: false,
+          lineStyle: { color: `rgba(${baseColor}, 0.50)`, width: 1 },
+          itemStyle: { color: `rgba(${baseColor}, 0.50)` },
         },
       ],
     };
