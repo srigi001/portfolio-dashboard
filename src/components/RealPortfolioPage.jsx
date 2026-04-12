@@ -611,7 +611,17 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
       const assetsWithValues = assetsWithData.map(asset => {
         const totalInvested = Math.round((asset.purchases.reduce((sum, p) => sum + p.totalUSD, 0)) * 100) / 100;
         const rate = getUsdRateSync(asset.currency);
-        const currentPriceUSD = (asset.currentPrice || 0) * rate;
+        
+        let currentPriceUSD = 0;
+        let isPriceMissing = false;
+        
+        if (!asset.currentPrice || asset.currentPrice <= 0) {
+          isPriceMissing = true;
+          currentPriceUSD = asset.averageCostBasis || 0; // Use historical average cost basis natively in USD
+        } else {
+          currentPriceUSD = asset.currentPrice * rate;
+        }
+        
         const currentValue = Math.round((currentPriceUSD * asset.totalShares) * 100) / 100;
         
         console.log(`💰 ${asset.symbol} calculations:`, {
@@ -625,7 +635,8 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           ...asset,
           totalInvested: totalInvested,
           currentValue: currentValue,
-          currentPriceUSD: currentPriceUSD
+          currentPriceUSD: currentPriceUSD,
+          isPriceMissing: isPriceMissing
         };
       });
 
@@ -2196,9 +2207,16 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
                   <div className="flex items-center justify-between">
                     <div className="flex items-center space-x-4">
                       <div className="text-lg font-semibold text-gray-900">{asset.symbol}</div>
-                      <span className="px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-800">
-                        {formatAssetCurrency(asset.currentPrice || 0, asset.currency)}
-                      </span>
+                      {asset.isPriceMissing || (!asset.currentPrice && !asset.currentPriceUSD) ? (
+                        <span className="px-2 py-1 rounded text-xs font-medium bg-amber-100 text-amber-800 flex items-center space-x-1" title="Market price unavailable. Falling back to average historical purchase price (USD).">
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                          <span>{formatCurrency(asset.averageCostBasis || 0)} (Fallback)</span>
+                        </span>
+                      ) : (
+                        <span className="px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                          {formatAssetCurrency(asset.currentPrice || 0, asset.currency)}
+                        </span>
+                      )}
                       <div className="text-sm text-gray-600">
                         Total Shares: {asset.totalShares.toLocaleString()}
                       </div>
