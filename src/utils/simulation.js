@@ -104,7 +104,15 @@ export function simulatePortfolio(payload, iterations = 1000) {
     percentile30: new Array(numMonths + 1),
     percentile70: new Array(numMonths + 1),
     percentile90: new Array(numMonths + 1),
+    invested: new Array(numMonths + 1),
   };
+
+  const cumulativeInvested = new Float64Array(numMonths + 1);
+  let runningTotal = 0;
+  for (let t = 0; t <= numMonths; t++) {
+    runningTotal += monthlyDepositsMap[t];
+    cumulativeInvested[t] = runningTotal;
+  }
 
   for (let t = 0; t <= numMonths; t++) {
     const tValues = allRuns.map(run => run[t]).sort((a, b) => a - b);
@@ -114,6 +122,7 @@ export function simulatePortfolio(payload, iterations = 1000) {
     result.median[t] = tValues[Math.floor(iterations * 0.5)];
     result.percentile70[t] = tValues[Math.floor(iterations * 0.7)];
     result.percentile90[t] = tValues[Math.floor(iterations * 0.9)];
+    result.invested[t] = cumulativeInvested[t];
     
     let sum = 0;
     for (let i = 0; i < iterations; i++) sum += tValues[i];

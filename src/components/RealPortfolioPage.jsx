@@ -5,7 +5,7 @@ import dayjs from 'dayjs';
 import { fetchPortfolioData } from '../utils/googleSheets';
 import { fetchAssetData, fetch10YPriceHistoryWithDates } from '../utils/calcMetrics';
 import { supabase } from '../utils/supabaseClient';
-import { simulatePortfolio } from '../utils/simulation';
+// Local simulation utility removed in favor of backend API
 
 // Helper function to get current date normalized to first of month (YYYY-MM-01)
 const getCurrentMonthStart = () => {
@@ -13,6 +13,20 @@ const getCurrentMonthStart = () => {
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, '0');
   return `${year}-${month}-01`;
+};
+
+// Tax category constants and helper
+const TAX_RULES = {
+  PENSION: 'pension',
+  HISHTALMUT: 'hishtalmut',
+  INVESTMENT: 'investment' // Joint + RSU
+};
+
+const getTaxCategory = (portfolioName) => {
+  const name = (portfolioName || '').toLowerCase();
+  if (name.includes('pension') || name.includes('gemel')) return TAX_RULES.PENSION;
+  if (name.includes('hishtalmut')) return TAX_RULES.HISHTALMUT;
+  return TAX_RULES.INVESTMENT;
 };
 
 // Inline component for one-time deposit input per asset
@@ -787,22 +801,27 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           }],
           oneTimeDeposits: oneTimeDepositsArray,
           monthlyChanges: assetMonthlyDeposits,
-          years: 10
+          years: 10,
+          cycles: 10000 // Exact requested iterations
         };
         
-        console.log(`📊 Simulation payload for ${asset.symbol}:`, {
-          allocations: payload.allocations,
-          oneTimeDeposits: payload.oneTimeDeposits,
-          monthlyChanges: payload.monthlyChanges,
-          monthlyChangesCount: payload.monthlyChanges.length,
-          years: payload.years
-        });
+        console.log(`📡 Calling backend simulation API for ${asset.symbol}:`, payload);
         
-        const result = simulatePortfolio(payload);
+        const response = await fetch('https://investment-dashboard-backend-gm79.onrender.com/api/simulate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+          throw new Error(`Backend simulation failed: ${response.status} ${response.statusText}`);
+        }
+
+        const result = await response.json();
         allSimulations[asset.symbol] = result;
-        console.log(`✅ Local simulation completed for ${asset.symbol}`);
+        console.log(`✅ Backend simulation completed for ${asset.symbol}`);
       } catch (error) {
-        console.warn(`⚠️ Local simulation error for ${asset.symbol}:`, error);
+        console.warn(`⚠️ Simulation error for ${asset.symbol}:`, error);
       }
     }
     
@@ -862,7 +881,14 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
       percentile10: [],
       percentile30: [],
       percentile70: [],
-      percentile90: []
+      percentile90: [],
+      // Post-tax values
+      postTaxMean: [],
+      postTaxMedian: [],
+      postTaxP10: [],
+      postTaxP30: [],
+      postTaxP70: [],
+      postTaxP90: []
     };
     
     // Sum up the results for each time point
@@ -874,13 +900,60 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
       let sumP70 = 0;
       let sumP90 = 0;
       
-      selectedSimulations.forEach(sim => {
-        sumMean += sim.mean[i] || 0;
-        sumMedian += sim.median[i] || 0;
-        sumP10 += sim.percentile10[i] || 0;
-        sumP30 += (sim.percentile30 ? sim.percentile30[i] : sim.median[i]) || 0;
-        sumP70 += (sim.percentile70 ? sim.percentile70[i] : sim.median[i]) || 0;
-        sumP90 += sim.percentile90[i] || 0;
+      let postTaxMean = 0;
+      let postTaxMedian = 0;
+      let postTaxP10 = 0;
+      let postTaxP30 = 0;
+      let postTaxP70 = 0;
+      let postTaxP90 = 0;
+      
+      // Get active simulation records (mapped to symbols to avoid index mismatch after filtering)
+      const activeSimRecords = selectedAssetSymbols
+        .map(symbol => ({ symbol, sim: allAssetSimulations[symbol] }))
+        .filter(item => item.sim);
+      
+      activeSimRecords.forEach(({ symbol, sim }) => {
+        const asset = realPortfolioData.assets.find(a => a.symbol === symbol);
+        const category = getTaxCategory(asset?.portfolio || '');
+        
+        const m = sim.mean[i] || 0;
+        const med = sim.median[i] || 0;
+        const p10 = sim.percentile10[i] || 0;
+        const p30 = (sim.percentile30 ? sim.percentile30[i] : med) || 0;
+        const p70 = (sim.percentile70 ? sim.percentile70[i] : med) || 0;
+        const p90 = sim.percentile90[i] || 0;
+        
+        sumMean += m;
+        sumMedian += med;
+        sumP10 += p10;
+        sumP30 += p30;
+        sumP70 += p70;
+        sumP90 += p90;
+        
+        // Helper for post-tax calculation per asset
+        const getPostTax = (val) => {
+          if (category === TAX_RULES.PENSION) {
+            return val * 0.65; // 35% tax on total
+          } else if (category === TAX_RULES.HISHTALMUT) {
+            const isTaxFree = i >= 36; // 3 years old + 3 years simulation = 6 years
+            return isTaxFree ? val : val * 0.53; // 47% tax if early
+          } else { // INVESTMENT / RSU / Joint
+            // Basis = InitialBasis + (TotalSimInvested - InitialSimBalance)
+            const initialSimBalance = sim.invested ? sim.invested[0] : val;
+            const currentSimInvested = sim.invested ? sim.invested[i] : val;
+            const futureInvested = currentSimInvested - initialSimBalance;
+            const totalBasis = (asset?.totalInvested || 0) + futureInvested;
+            const gain = Math.max(0, val - totalBasis);
+            return val - (gain * 0.25);
+          }
+        };
+        
+        postTaxMean += getPostTax(m);
+        postTaxMedian += getPostTax(med);
+        postTaxP10 += getPostTax(p10);
+        postTaxP30 += getPostTax(p30);
+        postTaxP70 += getPostTax(p70);
+        postTaxP90 += getPostTax(p90);
       });
       
       combinedResult.mean.push(Math.round(sumMean));
@@ -889,6 +962,13 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
       combinedResult.percentile30.push(Math.round(sumP30));
       combinedResult.percentile70.push(Math.round(sumP70));
       combinedResult.percentile90.push(Math.round(sumP90));
+      
+      combinedResult.postTaxMean.push(Math.round(postTaxMean));
+      combinedResult.postTaxMedian.push(Math.round(postTaxMedian));
+      combinedResult.postTaxP10.push(Math.round(postTaxP10));
+      combinedResult.postTaxP30.push(Math.round(postTaxP30));
+      combinedResult.postTaxP70.push(Math.round(postTaxP70));
+      combinedResult.postTaxP90.push(Math.round(postTaxP90));
     }
     
     console.log(`✅ Updated combined simulation with selected assets:`, selectedAssetSymbols);
@@ -954,26 +1034,21 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
         ? currentOneTimeDeposit
         : (oneTimeDeposits[asset.symbol] || null);
 
-      // Build one-time deposits array: always include initial deposit, plus optional user deposit
+      const currentMonthStart = getCurrentMonthStart();
       const oneTimeDepositsArray = [{
-        date: '2025-01-01',
+        date: currentMonthStart,
         amount: asset.currentValue
       }];
       
       // Add optional user-defined one-time deposit if it exists
       if (oneTimeDepositToUse && oneTimeDepositToUse.date && oneTimeDepositToUse.amount > 0) {
-        // Normalize date to first of month (backend only checks dates on month boundaries)
-        // Parse YYYY-MM-DD and convert to YYYY-MM-01
         const dateParts = oneTimeDepositToUse.date.split('-');
         if (dateParts.length === 3) {
           const normalizedDate = `${dateParts[0]}-${dateParts[1]}-01`;
-          
           oneTimeDepositsArray.push({
             date: normalizedDate,
             amount: oneTimeDepositToUse.amount
           });
-        } else {
-          console.warn(`⚠️ Invalid date format for one-time deposit: ${oneTimeDepositToUse.date}`);
         }
       }
 
@@ -985,12 +1060,23 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
         }],
         oneTimeDeposits: oneTimeDepositsArray,
         monthlyChanges: assetMonthlyDeposits,
-        years: 10
+        years: 10,
+        cycles: 10000 // Match requested 10k iterations
       };
 
-      console.log(`📊 Re-simulation payload for ${asset.symbol} (${cagrType}):`, payload);
+      console.log(`📡 Calling backend re-simulation API for ${asset.symbol}:`, payload);
       
-      const result = simulatePortfolio(payload);
+      const response = await fetch('https://investment-dashboard-backend-gm79.onrender.com/api/simulate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        throw new Error(`Backend simulation failed: ${response.status} ${response.statusText}`);
+      }
+
+      const result = await response.json();
       
       // Update both cached simulations
       setAllAssetSimulations(prev => {
@@ -1577,9 +1663,45 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
       return projIdx >= 0 && (projIdx + monthOffset) < percentile90.length ? percentile90[projIdx + monthOffset] : null;
     });
     
+    const postTaxP10Array = allDates.map((date, idx) => {
+      if (idx < finalProjectionStartIndex) return null;
+      const projIdx = projectedDates.indexOf(date);
+      return projIdx >= 0 && (projIdx + monthOffset) < combinedSimulation.postTaxP10.length ? combinedSimulation.postTaxP10[projIdx + monthOffset] : null;
+    });
+
+    const postTaxP30Array = allDates.map((date, idx) => {
+      if (idx < finalProjectionStartIndex) return null;
+      const projIdx = projectedDates.indexOf(date);
+      return projIdx >= 0 && (projIdx + monthOffset) < combinedSimulation.postTaxP30.length ? combinedSimulation.postTaxP30[projIdx + monthOffset] : null;
+    });
+
+    const postTaxMedianArray = allDates.map((date, idx) => {
+      if (idx < finalProjectionStartIndex) return null;
+      const projIdx = projectedDates.indexOf(date);
+      return projIdx >= 0 && (projIdx + monthOffset) < combinedSimulation.postTaxMedian.length ? combinedSimulation.postTaxMedian[projIdx + monthOffset] : null;
+    });
+
+    const postTaxP70Array = allDates.map((date, idx) => {
+      if (idx < finalProjectionStartIndex) return null;
+      const projIdx = projectedDates.indexOf(date);
+      return projIdx >= 0 && (projIdx + monthOffset) < combinedSimulation.postTaxP70.length ? combinedSimulation.postTaxP70[projIdx + monthOffset] : null;
+    });
+
+    const postTaxP90Array = allDates.map((date, idx) => {
+      if (idx < finalProjectionStartIndex) return null;
+      const projIdx = projectedDates.indexOf(date);
+      return projIdx >= 0 && (projIdx + monthOffset) < combinedSimulation.postTaxP90.length ? combinedSimulation.postTaxP90[projIdx + monthOffset] : null;
+    });
+    
     // Calculate Y-axis minimum (95% of minimum value) including historical data
     const historicalValues = historicalData.map(d => d.value);
-    const allValues = [...historicalValues.filter(v => v > 0), ...median.filter(v => v > 0), ...percentile10.filter(v => v > 0), ...percentile90.filter(v => v > 0)];
+    const allProjValues = [
+      ...median.filter(v => v > 0), 
+      ...percentile10.filter(v => v > 0), 
+      ...percentile90.filter(v => v > 0),
+      ...(combinedSimulation.postTaxP10 || []).filter(v => v > 0)
+    ];
+    const allValues = [...historicalValues.filter(v => v > 0), ...allProjValues];
     const minValue = Math.min(...allValues);
     const yAxisMin = Math.max(0, minValue * 0.95);
 
@@ -1600,7 +1722,12 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           const dateStr = allDates[idx];
           const date = dayjs(dateStr);
           
-          const formatUSD = (v) => {
+          const formatUSDOnly = (v) => {
+            if (v === undefined || v === null) return 'N/A';
+            return `$${Math.round(v).toLocaleString('en-US')}`;
+          };
+
+          const formatBoth = (v) => {
             if (v === undefined || v === null) return 'N/A';
             const usd = `$${Math.round(v).toLocaleString('en-US')}`;
             if (ilsExchangeRate > 0) {
@@ -1611,14 +1738,13 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           };
 
           // Format date: show day for historical data, month/year for projected
-          // Check if this is actually historical data (has historical value) rather than just checking index
           const isHistoricalData = historicalValuesArray[idx] !== null;
           const dateFormat = isHistoricalData
             ? date.format('MMM DD, YYYY')  // Daily format: "Nov 16, 2025"
             : date.format('MMM YYYY');      // Monthly format: "Nov 2025"
 
           let tooltipContent = `
-            <div style="font-weight: bold; margin-bottom: 8px;">
+            <div style="font-weight: bold; margin-bottom: 8px; font-size: 14px; border-bottom: 1px solid #eee; padding-bottom: 4px;">
               ${dateFormat}
             </div>
           `;
@@ -1627,29 +1753,43 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           if (historicalValuesArray[idx] !== null) {
             tooltipContent += `
               <div style="margin-bottom: 4px;">
-                <span style="color: #6366f1;">●</span> Historical: ${formatUSD(historicalValuesArray[idx])}
+                <span style="color: #6366f1;">●</span> Historical: ${formatBoth(historicalValuesArray[idx])}
               </div>
             `;
           }
           
-          // Add projected values if available
+          // Add projected values table if available
           if (medianArray[idx] !== null) {
+            const formatRow = (label, color, pre, post) => {
+              return `
+                <tr>
+                  <td style="padding: 3px 10px 3px 0; color: #374151;">
+                    <span style="display:inline-block;margin-right:6px;border-radius:10px;width:10px;height:10px;background-color:${color};"></span>
+                    ${label}
+                  </td>
+                  <td style="padding: 3px 10px; text-align: right; color: #4b5563;">${formatBoth(pre)}</td>
+                  <td style="padding: 3px 0; text-align: right; color: #111827; font-weight: bold;">${formatBoth(post)}</td>
+                </tr>
+              `;
+            };
+
             tooltipContent += `
-              <div style="margin-bottom: 4px;">
-                <span style="color: rgba(${baseColor}, 0.20);">●</span> 90th Percentile: ${formatUSD(percentile90Array[idx])}
-              </div>
-              <div style="margin-bottom: 4px;">
-                <span style="color: rgba(${baseColor}, 0.40);">●</span> 70th Percentile: ${formatUSD(percentile70Array[idx])}
-              </div>
-              <div style="margin-bottom: 4px;">
-                <span style="color: rgba(${baseColor}, 0.60);">●</span> Median: ${formatUSD(medianArray[idx])}
-              </div>
-              <div style="margin-bottom: 4px;">
-                <span style="color: rgba(${baseColor}, 0.80);">●</span> 30th Percentile: ${formatUSD(percentile30Array[idx])}
-              </div>
-              <div style="margin-bottom: 4px;">
-                <span style="color: rgba(${baseColor}, 1);">●</span> 10th Percentile: ${formatUSD(percentile10Array[idx])}
-              </div>
+              <table style="width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 4px;">
+                <thead>
+                  <tr style="color: #6b7280; border-bottom: 1px solid #f3f4f6;">
+                    <th style="text-align: left; font-weight: 500; padding-bottom: 4px;">Percentile</th>
+                    <th style="text-align: right; font-weight: 500; padding-bottom: 4px; padding-right: 10px;">Pre Tax</th>
+                    <th style="text-align: right; font-weight: 500; padding-bottom: 4px;">Post Tax</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${formatRow('90th', `rgba(${baseColor}, 0.20)`, percentile90Array[idx], postTaxP90Array[idx])}
+                  ${formatRow('70th', `rgba(${baseColor}, 0.40)`, percentile70Array[idx], postTaxP70Array[idx])}
+                  ${formatRow('Median', `rgba(${baseColor}, 0.60)`, medianArray[idx], postTaxMedianArray[idx])}
+                  ${formatRow('30th', `rgba(${baseColor}, 0.80)`, percentile30Array[idx], postTaxP30Array[idx])}
+                  ${formatRow('10th', `rgba(${baseColor}, 1)`, percentile10Array[idx], postTaxP10Array[idx])}
+                </tbody>
+              </table>
             `;
           }
           

@@ -94,16 +94,41 @@ app.post('/api/simulate', (req, res) => {
       return res.status(400).json({ error: 'No allocations provided' });
     }
 
-    // Determine simulation start date from first deposit/change
+    // Determine simulation start date and total months
     const allDates = [
       ...oneTimeDeposits.map((d) => d.date),
       ...monthlyChanges.map((d) => d.date),
     ].sort();
 
-    const firstDepositDateStr = allDates.length > 0 ? allDates[0] : '2025-01-01';
+    const firstDepositDateStr = allDates.length > 0 ? allDates[0] : new Date().toISOString().slice(0, 10);
     const firstDepositDate = new Date(firstDepositDateStr);
     const totalMonths = years * 12;
-    const allPaths = [];
+
+    const getMonthIndex = (dateStr) => {
+      const d = new Date(dateStr);
+      return (d.getFullYear() - firstDepositDate.getFullYear()) * 12 + (d.getMonth() - firstDepositDate.getMonth());
+    };
+
+    // Pre-process deposits into a deterministic monthly map
+    const monthlyDepositsMap = new Float64Array(totalMonths + 1).fill(0);
+    oneTimeDeposits.forEach(d => {
+      const idx = getMonthIndex(d.date);
+      if (idx >= 0 && idx <= totalMonths) monthlyDepositsMap[idx] += d.amount;
+    });
+    monthlyChanges.forEach(d => {
+      const startIdx = getMonthIndex(d.date);
+      for (let i = Math.max(0, startIdx); i <= totalMonths; i++) {
+        monthlyDepositsMap[i] += d.amount;
+      }
+    });
+
+    // Calculate deterministic invested curve
+    const investedCurve = new Float64Array(totalMonths + 1);
+    let runningInvested = 0;
+    for (let t = 0; t <= totalMonths; t++) {
+      runningInvested += monthlyDepositsMap[t];
+      investedCurve[t] = runningInvested;
+    }
 
     console.log('📊 Backend: Simulation parameters:', {
       firstDepositDate: firstDepositDateStr,
@@ -112,70 +137,49 @@ app.post('/api/simulate', (req, res) => {
       years
     });
 
+    const allPaths = [];
+    const dt = 1 / 12;
+
     for (let i = 0; i < cycles; i++) {
-      let path = [];
-      let value = 0;
-      let monthlyAmount = 0;
+      const path = new Float64Array(totalMonths + 1);
+      let balance = 0;
 
-      for (let month = 0; month <= totalMonths; month++) {
-        const currentDate = new Date(firstDepositDate);
-        currentDate.setMonth(currentDate.getMonth() + month);
-        const dateStr = currentDate.toISOString().slice(0, 10);
+      for (let t = 0; t <= totalMonths; t++) {
+        // 1. Add deposits for this month
+        balance += monthlyDepositsMap[t];
 
-        // Update monthly deposit if applicable
-        monthlyChanges.forEach((change) => {
-          if (change.date <= dateStr) {
-            monthlyAmount = change.amount;
-          }
-        });
-
-        // Apply one-time deposits
-        oneTimeDeposits.forEach((deposit) => {
-          if (deposit.date === dateStr) {
-            value += deposit.amount;
-          }
-        });
-
-        // Apply monthly deposits
-        if (monthlyAmount > 0) value += monthlyAmount;
-
-        // Store current value before compounding
-        let baseValue = value;
-
-        // Apply asset returns on previous value (start from month 1)
-        if (month > 0 && baseValue > 0) {
+        if (t > 0 && balance > 0) {
+          // 2. Growth from previous month using Geometric Brownian Motion (Log-normal)
           allocations.forEach((asset) => {
-            const monthlyReturn =
-              asset.cagr / 12 + randn_bm() * (asset.volatility / Math.sqrt(12));
-            baseValue *= 1 + monthlyReturn * (asset.allocation / 100);
+            const r = asset.cagr;
+            const sigma = asset.volatility;
+            const weight = (asset.allocation / 100);
+            
+            // Simplified drift/diffusion for the blended weighted portfolio
+            const drift = (r - 0.5 * sigma * sigma) * dt;
+            const diffusion = sigma * Math.sqrt(dt) * randn_bm();
+            balance *= Math.exp((drift + diffusion) * weight);
           });
-          value = baseValue;
         }
-
-        path.push(value);
+        path[t] = balance;
       }
-
       allPaths.push(path);
     }
 
-    // Aggregate paths
+    // Aggregate paths into percentiles
     const aggregated = [];
     for (let month = 0; month <= totalMonths; month++) {
       const monthValues = allPaths.map((path) => path[month]).sort((a, b) => a - b);
       const mean = monthValues.reduce((sum, v) => sum + v, 0) / monthValues.length;
-      const median = monthValues[Math.floor(monthValues.length / 2)];
-      const p10 = monthValues[Math.floor(monthValues.length * 0.1)];
-      const p30 = monthValues[Math.floor(monthValues.length * 0.3)];
-      const p70 = monthValues[Math.floor(monthValues.length * 0.7)];
-      const p90 = monthValues[Math.floor(monthValues.length * 0.9)];
+      
       aggregated.push({
         month,
         mean: isNaN(mean) ? 0 : mean,
-        median: isNaN(median) ? 0 : median,
-        p10: isNaN(p10) ? 0 : p10,
-        p30: isNaN(p30) ? 0 : p30,
-        p70: isNaN(p70) ? 0 : p70,
-        p90: isNaN(p90) ? 0 : p90,
+        median: monthValues[Math.floor(cycles * 0.5)],
+        p10: monthValues[Math.floor(cycles * 0.1)],
+        p30: monthValues[Math.floor(cycles * 0.3)],
+        p70: monthValues[Math.floor(cycles * 0.7)],
+        p90: monthValues[Math.floor(cycles * 0.9)],
       });
     }
 
@@ -188,17 +192,10 @@ app.post('/api/simulate', (req, res) => {
       percentile30: aggregated.map((r) => Math.round(r.p30)),
       percentile70: aggregated.map((r) => Math.round(r.p70)),
       percentile90: aggregated.map((r) => Math.round(r.p90)),
+      invested: Array.from(investedCurve).map(v => Math.round(v))
     };
 
     console.log('✅ Backend: Simulation completed successfully');
-    console.log('📊 Backend: Result summary:', {
-      months: result.months.length,
-      meanLength: result.mean.length,
-      medianLength: result.median.length,
-      firstMonthValue: result.median[0],
-      lastMonthValue: result.median[result.median.length - 1]
-    });
-
     res.json(result);
   } catch (e) {
     console.error('Simulation error:', e);
