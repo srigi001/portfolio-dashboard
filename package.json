@@ -34,6 +34,8 @@
   },
   "scripts": {
     "dev": "vite",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:all": "npm run dev & npm run dev:backend",
     "build": "vite build",
     "preview": "vite preview"
   }
