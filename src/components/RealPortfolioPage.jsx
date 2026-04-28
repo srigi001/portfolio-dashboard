@@ -346,6 +346,24 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     return cached ? parseFloat(cached) : 0;
   });
 
+  const [viewMode, setViewMode] = useState(() => {
+    return localStorage.getItem(getUserKey('viewMode')) || 'asset';
+  });
+
+  const [portfolioViewMode, setPortfolioViewMode] = useState(() => {
+    return localStorage.getItem(getUserKey('portfolioViewMode')) || 'flat';
+  });
+
+  const updateViewMode = (mode) => {
+    setViewMode(mode);
+    saveToLocalStorage('viewMode', mode);
+  };
+
+  const updatePortfolioViewMode = (mode) => {
+    setPortfolioViewMode(mode);
+    saveToLocalStorage('portfolioViewMode', mode);
+  };
+
   // Google Sheets configuration - User-specific persistence
   const [googleSheetsId, setGoogleSheetsId] = useState(() => {
     // Load from user-specific localStorage (persists across sessions)
@@ -2095,6 +2113,71 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     };
   };
 
+  const portfoliosData = React.useMemo(() => {
+    if (!realPortfolioData || !realPortfolioData.assets) return [];
+
+    const portMap = {};
+    
+    realPortfolioData.assets.forEach(asset => {
+      asset.purchases.forEach(purchase => {
+        const portName = purchase.portfolio || 'Default';
+        if (!portMap[portName]) {
+          portMap[portName] = {
+            name: portName,
+            totalInvested: 0,
+            currentValue: 0,
+            assetsMap: {},
+            allPurchases: []
+          };
+        }
+        
+        if (!portMap[portName].assetsMap[asset.symbol]) {
+          portMap[portName].assetsMap[asset.symbol] = {
+            symbol: asset.symbol,
+            currency: asset.currency,
+            shares: 0,
+            invested: 0,
+            currentValue: 0,
+            purchases: []
+          };
+        }
+        
+        const currentPriceNative = asset.currentPrice || 0;
+        const currentPriceUSD = asset.currentPriceUSD !== undefined 
+          ? asset.currentPriceUSD 
+          : (currentPriceNative * (asset.currency === 'ILS' ? (ilsExchangeRate > 0 ? 1/ilsExchangeRate : 0.2933) : 
+                                asset.currency === 'GBP' ? (gbpExchangeRate > 0 ? gbpExchangeRate : 1.27) : 1.0));
+        
+        const effectivePriceUSD = currentPriceUSD || purchase.priceUSD;
+        const purchaseCurrentValue = effectivePriceUSD * purchase.shares;
+        
+        const purchaseWithAsset = {
+          ...purchase,
+          assetSymbol: asset.symbol,
+          currentValue: purchaseCurrentValue,
+          effectivePriceUSD
+        };
+        
+        portMap[portName].allPurchases.push(purchaseWithAsset);
+        portMap[portName].assetsMap[asset.symbol].purchases.push(purchaseWithAsset);
+        
+        portMap[portName].assetsMap[asset.symbol].shares += purchase.shares;
+        portMap[portName].assetsMap[asset.symbol].invested += purchase.totalUSD;
+        portMap[portName].assetsMap[asset.symbol].currentValue += purchaseCurrentValue;
+        
+        portMap[portName].totalInvested += purchase.totalUSD;
+        portMap[portName].currentValue += purchaseCurrentValue;
+      });
+    });
+    
+    // Sort purchases by date within flat list
+    Object.values(portMap).forEach(port => {
+      port.allPurchases.sort((a, b) => new Date(a.date) - new Date(b.date));
+    });
+    
+    return Object.values(portMap).sort((a, b) => b.currentValue - a.currentValue);
+  }, [realPortfolioData, ilsExchangeRate, gbpExchangeRate]);
+
   // Security check - only allow access to the owner
   if (!user || user.email !== 'srigi001@gmail.com') {
     return (
@@ -2371,8 +2454,176 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           </div>
         )}
 
-        {/* Assets Table */}
+        {/* View Mode Toggles */}
+        <div className="mt-8 mb-6 border-b border-slate-200">
+          <nav className="-mb-px flex space-x-8" aria-label="Tabs">
+            <button
+              onClick={() => updateViewMode('asset')}
+              className={`${
+                viewMode === 'asset'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+              } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors`}
+            >
+              View by Asset
+            </button>
+            <button
+              onClick={() => updateViewMode('portfolio')}
+              className={`${
+                viewMode === 'portfolio'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+              } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors`}
+            >
+              View by Portfolio
+            </button>
+          </nav>
+        </div>
+
+        {viewMode === 'portfolio' ? (
           <div className="space-y-6">
+            <div className="flex justify-end mb-4">
+              <span className="mr-3 text-sm text-slate-600 self-center">Display Format:</span>
+              <div className="bg-slate-100 p-1 rounded-md inline-flex">
+                <button
+                  onClick={() => updatePortfolioViewMode('flat')}
+                  className={`px-3 py-1 text-sm rounded ${portfolioViewMode === 'flat' ? 'bg-white shadow text-slate-900 font-medium' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                  Flat List
+                </button>
+                <button
+                  onClick={() => updatePortfolioViewMode('grouped')}
+                  className={`px-3 py-1 text-sm rounded ${portfolioViewMode === 'grouped' ? 'bg-white shadow text-slate-900 font-medium' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                  Grouped by Asset
+                </button>
+              </div>
+            </div>
+            
+            {portfoliosData.map((port, pIndex) => (
+              <div key={pIndex} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                <div className="p-5 border-b border-slate-200 bg-slate-50">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="text-xl font-bold text-slate-800">{port.name}</div>
+                    <div className="flex flex-wrap items-center gap-6">
+                      <div className="flex flex-col">
+                        <span className="text-xs font-medium text-slate-500 uppercase tracking-wider">Total Invested</span>
+                        <span className="text-sm font-semibold text-slate-700">{formatCurrency(port.totalInvested)}</span>
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-xs font-medium text-slate-500 uppercase tracking-wider">Current Value</span>
+                        <span className="text-sm font-bold text-blue-600">{formatCurrency(port.currentValue)}</span>
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-xs font-medium text-slate-500 uppercase tracking-wider">Total Yield</span>
+                        <span className={`text-sm font-bold ${(port.currentValue - port.totalInvested) >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                          {formatCurrency(port.currentValue - port.totalInvested)} ({port.totalInvested > 0 ? (((port.currentValue - port.totalInvested) / port.totalInvested) * 100).toFixed(2) : '0.00'}%)
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-5">
+                  {portfolioViewMode === 'flat' ? (
+                    <div className="overflow-x-auto border border-slate-200 rounded-lg">
+                      <table className="min-w-full divide-y divide-slate-200">
+                        <thead className="bg-slate-50">
+                          <tr>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Date</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Asset</th>
+                            <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">Shares</th>
+                            <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">Purchase Price $</th>
+                            <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">Purchase Value</th>
+                            <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">% Change</th>
+                            <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">$ Yield</th>
+                            <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">Current Value</th>
+                          </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-slate-200">
+                          {port.allPurchases.map((purchase, idx) => {
+                            const priceChange = purchase.priceUSD > 0 ? ((purchase.effectivePriceUSD - purchase.priceUSD) / purchase.priceUSD) * 100 : 0;
+                            const dollarYield = (purchase.effectivePriceUSD - purchase.priceUSD) * purchase.shares;
+                            const isPositive = priceChange >= 0;
+                            
+                            return (
+                              <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                                <td className="px-4 py-3 text-sm text-slate-900 whitespace-nowrap">{purchase.date}</td>
+                                <td className="px-4 py-3 text-sm font-medium text-slate-900">{purchase.assetSymbol}</td>
+                                <td className="px-4 py-3 text-sm text-slate-600 text-right">{purchase.shares.toLocaleString()}</td>
+                                <td className="px-4 py-3 text-sm text-slate-600 text-right">{formatCurrency(purchase.priceUSD)}</td>
+                                <td className="px-4 py-3 text-sm text-slate-600 text-right">{formatCurrency(purchase.shares * purchase.priceUSD)}</td>
+                                <td className={`px-4 py-3 text-sm font-medium text-right ${isPositive ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                  {priceChange >= 0 ? '+' : ''}{priceChange.toFixed(2)}%
+                                </td>
+                                <td className={`px-4 py-3 text-sm font-medium text-right ${isPositive ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                  {dollarYield >= 0 ? '+' : ''}{formatCurrency(dollarYield)}
+                                </td>
+                                <td className="px-4 py-3 text-sm font-medium text-right text-slate-900">{formatCurrency(purchase.currentValue)}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="space-y-6">
+                      {Object.values(port.assetsMap).sort((a, b) => b.currentValue - a.currentValue).map((assetItem, aIndex) => (
+                        <div key={aIndex} className="border border-slate-200 rounded-lg overflow-hidden">
+                          <div className="bg-slate-50 px-4 py-3 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                            <span className="font-semibold text-slate-800 text-lg">{assetItem.symbol}</span>
+                            <div className="flex flex-wrap items-center gap-4 text-sm">
+                              <span className="text-slate-600">Invested: <span className="font-medium text-slate-900">{formatCurrency(assetItem.invested)}</span></span>
+                              <span className="text-slate-600">Value: <span className="font-medium text-blue-600">{formatCurrency(assetItem.currentValue)}</span></span>
+                              <span className={`font-medium ${(assetItem.currentValue - assetItem.invested) >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                Yield: {formatCurrency(assetItem.currentValue - assetItem.invested)}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="p-0">
+                            <div className="overflow-x-auto">
+                              <table className="min-w-full divide-y divide-slate-100">
+                                <thead className="bg-white">
+                                  <tr>
+                                    <th className="px-4 py-2 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Date</th>
+                                    <th className="px-4 py-2 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">Shares</th>
+                                    <th className="px-4 py-2 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">Purchase $</th>
+                                    <th className="px-4 py-2 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">Purchase Value</th>
+                                    <th className="px-4 py-2 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">% Change</th>
+                                    <th className="px-4 py-2 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">Current Value</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-slate-50">
+                                  {assetItem.purchases.map((purchase, idx) => {
+                                    const priceChange = purchase.priceUSD > 0 ? ((purchase.effectivePriceUSD - purchase.priceUSD) / purchase.priceUSD) * 100 : 0;
+                                    return (
+                                      <tr key={idx} className="hover:bg-slate-50">
+                                        <td className="px-4 py-2 text-sm text-slate-700 whitespace-nowrap">{purchase.date}</td>
+                                        <td className="px-4 py-2 text-sm text-slate-600 text-right">{purchase.shares.toLocaleString()}</td>
+                                        <td className="px-4 py-2 text-sm text-slate-600 text-right">{formatCurrency(purchase.priceUSD)}</td>
+                                        <td className="px-4 py-2 text-sm text-slate-600 text-right">{formatCurrency(purchase.shares * purchase.priceUSD)}</td>
+                                        <td className={`px-4 py-2 text-sm font-medium text-right ${priceChange >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                          {priceChange >= 0 ? '+' : ''}{priceChange.toFixed(2)}%
+                                        </td>
+                                        <td className="px-4 py-2 text-sm font-medium text-right text-slate-900">{formatCurrency(purchase.currentValue)}</td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {/* Assets Table */}
             {realPortfolioData.assets.map((asset, index) => (
               <div key={index} className="bg-white rounded-lg shadow-md overflow-hidden">
                 {/* Asset Header */}
@@ -2559,6 +2810,7 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
               </div>
             ))}
           </div>
+        )}
         </div>
       )}
 
