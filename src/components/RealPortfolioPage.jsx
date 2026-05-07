@@ -1996,6 +1996,103 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     };
   };
 
+  const getPortfolioPieOption = () => {
+    if (!portfoliosData || portfoliosData.length === 0) return {};
+
+    const data = portfoliosData.map(port => ({
+      name: port.name,
+      value: port.currentValue
+    }));
+
+    return {
+      title: {
+        text: 'Portfolio Distribution',
+        left: 'center',
+        top: 20,
+        textStyle: {
+          color: '#1e293b',
+          fontSize: 18,
+          fontWeight: 'bold'
+        }
+      },
+      tooltip: {
+        trigger: 'item',
+        backgroundColor: 'rgba(255, 255, 255, 0.95)',
+        borderWidth: 0,
+        padding: [10, 15],
+        textStyle: {
+          color: '#1e293b'
+        },
+        shadowBlur: 10,
+        shadowColor: 'rgba(0, 0, 0, 0.1)',
+        formatter: (params) => {
+          return `<div style="font-family: inherit;">
+            <div style="font-size: 12px; color: #64748b; margin-bottom: 4px;">Portfolio Breakdown</div>
+            <div style="font-weight: bold; font-size: 14px; margin-bottom: 4px;">${params.name}</div>
+            <div style="font-size: 16px; color: #3b82f6; font-weight: 600;">
+              ${formatCurrency(params.value)} <span style="font-size: 12px; font-weight: normal; color: #64748b; margin-left: 4px;">(${params.percent}%)</span>
+            </div>
+          </div>`;
+        }
+      },
+      legend: {
+        bottom: '5%',
+        left: 'center',
+        icon: 'circle',
+        itemGap: 20,
+        textStyle: {
+          color: '#64748b',
+          fontSize: 12
+        }
+      },
+      series: [
+        {
+          name: 'Portfolio',
+          type: 'pie',
+          radius: ['45%', '70%'],
+          center: ['50%', '45%'],
+          avoidLabelOverlap: false,
+          itemStyle: {
+            borderRadius: 12,
+            borderColor: '#fff',
+            borderWidth: 3
+          },
+          label: {
+            show: false,
+            position: 'center'
+          },
+          emphasis: {
+            label: {
+              show: true,
+              fontSize: '18',
+              fontWeight: 'bold',
+              formatter: '{b}'
+            },
+            itemStyle: {
+              shadowBlur: 20,
+              shadowOffsetX: 0,
+              shadowColor: 'rgba(0, 0, 0, 0.15)'
+            }
+          },
+          labelLine: {
+            show: false
+          },
+          data: data,
+          color: [
+            '#3b82f6', // blue-500
+            '#10b981', // emerald-500
+            '#f59e0b', // amber-500
+            '#6366f1', // indigo-500
+            '#8b5cf6', // violet-500
+            '#ec4899', // pink-500
+            '#06b6d4', // cyan-500
+            '#f97316'  // orange-500
+          ]
+        }
+      ]
+    };
+  };
+
   const getLoadingChartOption = () => {
     return {
       title: {
@@ -2482,6 +2579,16 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
 
         {viewMode === 'portfolio' ? (
           <div className="space-y-6">
+            {/* Portfolio Distribution Pie Chart */}
+            <div className="bg-white p-2 rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+              <div className="h-[400px]">
+                <ReactECharts 
+                  option={getPortfolioPieOption()} 
+                  style={{ height: '100%', width: '100%' }}
+                />
+              </div>
+            </div>
+
             <div className="flex justify-end mb-4">
               <span className="mr-3 text-sm text-slate-600 self-center">Display Format:</span>
               <div className="bg-slate-100 p-1 rounded-md inline-flex">
