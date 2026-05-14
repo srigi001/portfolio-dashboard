@@ -65,8 +65,11 @@ export function simulatePortfolio(payload, iterations = 1000) {
   // We assume the deposit repeats every month from that date onwards.
   monthlyChanges.forEach(d => {
     const startIdx = getMonthIndex(d.date);
+    // Support optional endDate (stop date)
+    const endIdx = d.endDate ? getMonthIndex(d.endDate) : numMonths;
+    
     if (startIdx <= numMonths) {
-      for (let i = Math.max(0, startIdx); i <= numMonths; i++) {
+      for (let i = Math.max(0, startIdx); i <= Math.min(numMonths, endIdx); i++) {
         monthlyDepositsMap[i] += d.amount;
       }
     }

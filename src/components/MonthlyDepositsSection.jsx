@@ -5,15 +5,22 @@ import { Card } from './ui/Card';
 export default function MonthlyDepositsSection({ changes, setChanges }) {
   const [amount, setAmount] = useState('');
   const [date, setDate] = useState('');
+  const [endDate, setEndDate] = useState('');
 
   const handleAdd = () => {
     if (!amount || !date) return;
     setChanges([
       ...changes,
-      { id: Date.now().toString(), amount: parseFloat(amount), date }
+      { 
+        id: Date.now().toString(), 
+        amount: parseFloat(amount), 
+        date,
+        endDate: endDate || null
+      }
     ]);
     setAmount('');
     setDate('');
+    setEndDate('');
   };
 
   const handleRemove = (id) => {
@@ -36,6 +43,14 @@ export default function MonthlyDepositsSection({ changes, setChanges }) {
           value={date}
           onChange={(e) => setDate(e.target.value)}
           className="bg-white border border-gray-300 rounded p-2 focus:outline-none focus:ring focus:border-blue-400 text-gray-900"
+          placeholder="Start Date"
+        />
+        <input
+          type="date"
+          value={endDate}
+          onChange={(e) => setEndDate(e.target.value)}
+          className="bg-white border border-gray-300 rounded p-2 focus:outline-none focus:ring focus:border-blue-400 text-gray-900"
+          placeholder="Stop Date (Opt)"
         />
         <Button onClick={handleAdd}>Add Deposit Change</Button>
       </div>
@@ -44,14 +59,15 @@ export default function MonthlyDepositsSection({ changes, setChanges }) {
           <tr>
             <th className="p-2 text-left text-gray-900 font-semibold">New Amount (ILS)</th>
             <th className="p-2 text-left text-gray-900 font-semibold">Effective From</th>
+            <th className="p-2 text-left text-gray-900 font-semibold">Effective To</th>
             <th className="p-2"></th>
           </tr>
         </thead>
         <tbody>
-          {changes.map((c, index) => (
             <tr key={c.id} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
               <td className="p-2 text-gray-900">{c.amount.toLocaleString()}</td>
               <td className="p-2 text-gray-900">{c.date}</td>
+              <td className="p-2 text-gray-900">{c.endDate || 'Ongoing'}</td>
               <td className="p-2">
                 <Button onClick={() => handleRemove(c.id)} variant="danger">Remove</Button>
               </td>

@@ -162,16 +162,19 @@ function OneTimeDepositInput({ asset, oneTimeDeposit, onSet, onRemove, formatCur
 function MonthlyDepositInput({ asset, monthlyDeposits, onAdd, onRemove, formatCurrency }) {
   const [amount, setAmount] = useState('');
   const [date, setDate] = useState('');
+  const [endDate, setEndDate] = useState('');
 
   const handleAdd = () => {
     if (!amount || !date || parseFloat(amount) <= 0) return;
     onAdd({
       id: Date.now().toString(),
       date: date,
+      endDate: endDate || null,
       amount: parseFloat(amount)
     });
     setAmount('');
     setDate('');
+    setEndDate('');
   };
 
   const handleKeyPress = (e) => {
@@ -209,6 +212,16 @@ function MonthlyDepositInput({ asset, monthlyDeposits, onAdd, onRemove, formatCu
             className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
+        <div className="flex-1">
+          <label className="block text-xs text-gray-500 mb-1">Stop Date (Opt)</label>
+          <input
+            type="date"
+            value={endDate}
+            onChange={(e) => setEndDate(e.target.value)}
+            onKeyPress={handleKeyPress}
+            className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
         <button
           onClick={handleAdd}
           className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -222,33 +235,35 @@ function MonthlyDepositInput({ asset, monthlyDeposits, onAdd, onRemove, formatCu
       {monthlyDeposits && monthlyDeposits.length > 0 && (
         <div className="mt-4">
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Start Date</th>
-                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Monthly Amount ($)</th>
-                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Start Date</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Stop Date</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Monthly Amount ($)</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {monthlyDeposits.map((deposit) => (
+                <tr key={deposit.id}>
+                  <td className="px-3 py-2 text-sm text-gray-900">{deposit.date}</td>
+                  <td className="px-3 py-2 text-sm text-gray-900">{deposit.endDate || 'Ongoing'}</td>
+                  <td className="px-3 py-2 text-sm text-gray-900">
+                    {formatCurrency(deposit.amount)}
+                  </td>
+                  <td className="px-3 py-2 text-sm">
+                    <button
+                      onClick={() => onRemove(deposit.id)}
+                      className="text-red-600 hover:text-red-800 text-xs font-medium"
+                    >
+                      Remove
+                    </button>
+                  </td>
                 </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {monthlyDeposits.map((deposit) => (
-                  <tr key={deposit.id}>
-                    <td className="px-3 py-2 text-sm text-gray-900">{deposit.date}</td>
-                    <td className="px-3 py-2 text-sm text-gray-900">
-                      {formatCurrency(deposit.amount)}
-                    </td>
-                    <td className="px-3 py-2 text-sm">
-                      <button
-                        onClick={() => onRemove(deposit.id)}
-                        className="text-red-600 hover:text-red-800 text-xs font-medium"
-                      >
-                        Remove
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+              ))}
+            </tbody>
+          </table>
           </div>
         </div>
       )}
@@ -765,8 +780,16 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
         const assetMonthlyDeposits = (monthlyDeposits[asset.symbol] || []).map(d => {
           const dateParts = d.date.split('-');
           const normalizedDate = dateParts.length === 3 ? `${dateParts[0]}-${dateParts[1]}-01` : d.date;
+          
+          let normalizedEndDate = null;
+          if (d.endDate) {
+            const endParts = d.endDate.split('-');
+            normalizedEndDate = endParts.length === 3 ? `${endParts[0]}-${endParts[1]}-01` : d.endDate;
+          }
+
           return {
             date: normalizedDate,
+            endDate: normalizedEndDate,
             amount: d.amount
           };
         });
@@ -819,8 +842,8 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           }],
           oneTimeDeposits: oneTimeDepositsArray,
           monthlyChanges: assetMonthlyDeposits,
-          years: 10,
-          cycles: 10000 // Exact requested iterations
+          years: 15,
+          cycles: 15000 // Match requested 15k iterations
         };
         
         console.log(`📡 Calling backend simulation API for ${asset.symbol}:`, payload);
@@ -1037,8 +1060,16 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
       const assetMonthlyDeposits = depositsToUse.map(d => {
         const dateParts = d.date.split('-');
         const normalizedDate = dateParts.length === 3 ? `${dateParts[0]}-${dateParts[1]}-01` : d.date;
+        
+        let normalizedEndDate = null;
+        if (d.endDate) {
+          const endParts = d.endDate.split('-');
+          normalizedEndDate = endParts.length === 3 ? `${endParts[0]}-${endParts[1]}-01` : d.endDate;
+        }
+
         return {
           date: normalizedDate,
+          endDate: normalizedEndDate,
           amount: d.amount
         };
       });
@@ -1078,8 +1109,8 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
         }],
         oneTimeDeposits: oneTimeDepositsArray,
         monthlyChanges: assetMonthlyDeposits,
-        years: 10,
-        cycles: 10000 // Match requested 10k iterations
+        years: 15,
+        cycles: 15000 // Match requested 15k iterations
       };
 
       console.log(`📡 Calling backend re-simulation API for ${asset.symbol}:`, payload);
@@ -1154,8 +1185,16 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
       const assetMonthlyDeposits = (monthlyDeposits[asset.symbol] || []).map(d => {
         const dateParts = d.date.split('-');
         const normalizedDate = dateParts.length === 3 ? `${dateParts[0]}-${dateParts[1]}-01` : d.date;
+        
+        let normalizedEndDate = null;
+        if (d.endDate) {
+          const endParts = d.endDate.split('-');
+          normalizedEndDate = endParts.length === 3 ? `${endParts[0]}-${endParts[1]}-01` : d.endDate;
+        }
+
         return {
           date: normalizedDate,
+          endDate: normalizedEndDate,
           amount: d.amount
         };
       });
@@ -1201,8 +1240,26 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
 
       console.log(`📊 Simulation payload for ${asset.symbol} (${cagrType}):`, payload);
       
-      const result = simulatePortfolio(payload);
-      console.log(`✅ Local simulation result for ${asset.symbol}:`, result);
+      // Use backend API for 15,000 iterations
+      const res = await fetch(
+        'https://investment-dashboard-backend-gm79.onrender.com/api/simulate',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...payload,
+            cycles: 15000,
+            years: 15
+          }),
+        }
+      );
+
+      if (!res.ok) {
+        throw new Error('Backend simulation failed');
+      }
+
+      const result = await res.json();
+      console.log(`✅ Backend simulation result for ${asset.symbol}:`, result);
       
       updateAssetSimulations({
         ...assetSimulations,

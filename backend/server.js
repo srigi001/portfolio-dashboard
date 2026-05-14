@@ -117,7 +117,10 @@ app.post('/api/simulate', (req, res) => {
     });
     monthlyChanges.forEach(d => {
       const startIdx = getMonthIndex(d.date);
-      for (let i = Math.max(0, startIdx); i <= totalMonths; i++) {
+      // Support optional endDate (stop date)
+      const endIdx = d.endDate ? getMonthIndex(d.endDate) : totalMonths;
+      
+      for (let i = Math.max(0, startIdx); i <= Math.min(totalMonths, endIdx); i++) {
         monthlyDepositsMap[i] += d.amount;
       }
     });
