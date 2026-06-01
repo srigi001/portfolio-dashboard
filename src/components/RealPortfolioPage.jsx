@@ -777,29 +777,35 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
         
         // Get monthly deposits for this asset (convert from {id, date, amount} to {date, amount} for backend)
         // Normalize dates to first of month (backend only checks dates on month boundaries)
-        const assetMonthlyDeposits = (monthlyDeposits[asset.symbol] || []).map(d => {
-          const dateParts = d.date.split('-');
-          const normalizedDate = dateParts.length === 3 ? `${dateParts[0]}-${dateParts[1]}-01` : d.date;
-          
-          let normalizedEndDate = null;
-          if (d.endDate) {
-            const endParts = d.endDate.split('-');
-            normalizedEndDate = endParts.length === 3 ? `${endParts[0]}-${endParts[1]}-01` : d.endDate;
-          }
+        const currentMonthStart = getCurrentMonthStart();
+        const assetMonthlyDeposits = (monthlyDeposits[asset.symbol] || [])
+          .map(d => {
+            const dateParts = d.date.split('-');
+            const normalizedDate = dateParts.length === 3 ? `${dateParts[0]}-${dateParts[1]}-01` : d.date;
+            
+            let normalizedEndDate = null;
+            if (d.endDate) {
+              const endParts = d.endDate.split('-');
+              normalizedEndDate = endParts.length === 3 ? `${endParts[0]}-${endParts[1]}-01` : d.endDate;
+            }
 
-          return {
-            date: normalizedDate,
-            endDate: normalizedEndDate,
-            amount: d.amount
-          };
-        });
+            return {
+              date: normalizedDate,
+              endDate: normalizedEndDate,
+              amount: d.amount
+            };
+          })
+          .filter(d => !d.endDate || d.endDate >= currentMonthStart)
+          .map(d => ({
+            ...d,
+            date: d.date < currentMonthStart ? currentMonthStart : d.date
+          }));
         
         if (assetMonthlyDeposits.length > 0) {
           console.log(`💰 Monthly deposits for ${asset.symbol}:`, assetMonthlyDeposits);
         }
 
         // Build one-time deposits array: always include initial deposit, plus optional user deposit
-        const currentMonthStart = getCurrentMonthStart();
         const oneTimeDepositsArray = [{
           date: currentMonthStart,
           amount: asset.currentValue
@@ -910,6 +916,18 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     if (selectedSimulations.length === 0) {
       console.warn('⚠️ No simulations found for selected assets');
       setCombinedSimulation(null);
+      return;
+    }
+    
+    // Verify that all active simulations are aligned and not stale (start on the same current month date)
+    const currentMonthStart = getCurrentMonthStart();
+    const uniqueStartDates = [...new Set(selectedSimulations.map(sim => sim.simulationStartDate))];
+    if (uniqueStartDates.length > 1 || (uniqueStartDates[0] && uniqueStartDates[0] !== currentMonthStart)) {
+      console.warn('⚠️ Detected misaligned or stale simulation start dates in cache:', uniqueStartDates);
+      if (realPortfolioData?.assets && !isSimulatingAll) {
+        console.log('🔄 Auto-triggering re-simulation to align dates to current month:', currentMonthStart);
+        simulateAllAssets(realPortfolioData.assets);
+      }
       return;
     }
     
@@ -1182,22 +1200,29 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
       
       // Get monthly deposits for this asset (convert from {id, date, amount} to {date, amount} for backend)
       // Normalize dates to first of month (backend only checks dates on month boundaries)
-      const assetMonthlyDeposits = (monthlyDeposits[asset.symbol] || []).map(d => {
-        const dateParts = d.date.split('-');
-        const normalizedDate = dateParts.length === 3 ? `${dateParts[0]}-${dateParts[1]}-01` : d.date;
-        
-        let normalizedEndDate = null;
-        if (d.endDate) {
-          const endParts = d.endDate.split('-');
-          normalizedEndDate = endParts.length === 3 ? `${endParts[0]}-${endParts[1]}-01` : d.endDate;
-        }
+      const currentMonthStart = getCurrentMonthStart();
+      const assetMonthlyDeposits = (monthlyDeposits[asset.symbol] || [])
+        .map(d => {
+          const dateParts = d.date.split('-');
+          const normalizedDate = dateParts.length === 3 ? `${dateParts[0]}-${dateParts[1]}-01` : d.date;
+          
+          let normalizedEndDate = null;
+          if (d.endDate) {
+            const endParts = d.endDate.split('-');
+            normalizedEndDate = endParts.length === 3 ? `${endParts[0]}-${endParts[1]}-01` : d.endDate;
+          }
 
-        return {
-          date: normalizedDate,
-          endDate: normalizedEndDate,
-          amount: d.amount
-        };
-      });
+          return {
+            date: normalizedDate,
+            endDate: normalizedEndDate,
+            amount: d.amount
+          };
+        })
+        .filter(d => !d.endDate || d.endDate >= currentMonthStart)
+        .map(d => ({
+          ...d,
+          date: d.date < currentMonthStart ? currentMonthStart : d.date
+        }));
       
       if (assetMonthlyDeposits.length > 0) {
         console.log(`💰 Monthly deposits for ${asset.symbol} (runAssetSimulation):`, assetMonthlyDeposits);
@@ -1205,7 +1230,7 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
 
       // Build one-time deposits array: always include initial deposit, plus optional user deposit
       const oneTimeDepositsArray = [{
-        date: '2025-01-01',
+        date: currentMonthStart,
         amount: asset.currentValue // Use current value as initial deposit
       }];
       
@@ -1542,14 +1567,14 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     
     // Get all unique dates from price history (daily resolution)
     // We need to merge dates from all selected assets to get a complete daily timeline
+    // First, collect all dates from all selected assets' price history
     const allDatesSet = new Set();
     
-    // First, collect all dates from all selected assets' price history
     selectedSymbols.forEach(symbol => {
       if (priceHistoryData[symbol]) {
         priceHistoryData[symbol].forEach(({ date }) => {
-          // Only include dates from the first purchase onwards and up to the most recent purchase date
-          if (date >= earliestDate && date <= mostRecentPurchaseDate) {
+          // Only include dates from the first purchase onwards to display the full history
+          if (date >= earliestDate) {
             allDatesSet.add(date);
           }
         });
@@ -1594,7 +1619,8 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
           }
           
           if (price && cumulativeShares > 0) {
-            portfolioValue += price * cumulativeShares;
+            const rate = getUsdRate(asset.currency);
+            portfolioValue += price * rate * cumulativeShares;
           }
         }
       });
@@ -1665,23 +1691,11 @@ export default function RealPortfolioPage({ portfolio, updatePortfolio, user }) 
     // Combine all dates, removing duplicates and sorting
     const allDates = [...new Set([...historicalDates, ...projectedDates])].sort();
     
-    // Find the index where historical ends (at most recent purchase date) and projection begins
-    // Historical data ends at the most recent purchase date, projection starts from the simulation start date
-    // Find the last historical date index (should be at or before the most recent purchase date)
-    let lastHistoricalIndex = -1;
-    if (mostRecentPurchaseDate) {
-      for (let i = allDates.length - 1; i >= 0; i--) {
-        if (allDates[i] <= mostRecentPurchaseDate) {
-          lastHistoricalIndex = i;
-          break;
-        }
-      }
-    } else {
-      // Fallback: use the last historical date if mostRecentPurchaseDate is not available
-      lastHistoricalIndex = historicalDates.length > 0 
-        ? allDates.findIndex(d => d === historicalDates[historicalDates.length - 1])
-        : -1;
-    }
+    // Find the index where historical ends and projection begins
+    // Historical data ends at the latest available price date
+    const lastHistoricalIndex = historicalDates.length > 0 
+      ? allDates.findIndex(d => d === historicalDates[historicalDates.length - 1])
+      : -1;
     
     // Find the first projection date index
     // Projections are monthly and start from the first of the month AFTER the most recent purchase
